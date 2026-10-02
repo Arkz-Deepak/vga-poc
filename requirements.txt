@@ -9,3 +9,5 @@ gymnasium>=0.29.1
 mujoco>=3.2.0
 zarr>=2.18.2
 wandb
+av
+datasets

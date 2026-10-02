@@ -11,3 +11,4 @@ zarr>=2.18.2
 wandb
 av
 datasets
+num2words

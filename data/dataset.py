@@ -116,31 +116,102 @@ class LiberoSpatialDataset(Dataset):
         # 2. Build frame index mapping: dataset_idx -> (episode_id, frame_in_episode)
         self.valid_frames = self._build_frame_indices()
 
-    def _filter_episodes(self, shots_per_task: Optional[int]) -> List[int]:
+    def _get_all_episodes_metadata(self) -> List[Dict]:
+        """
+        Universally extracts (ep_idx, from, to, task) across all LeRobot versions:
+        - Modern LeRobot (v0.6+ / v3.0): dataset.meta.episodes
+        - Legacy LeRobot (v2.0 / v2.1): dataset.episode_data_index
+        - Fallback: dynamic discovery
+        """
+        episodes_info = []
+
+        # 1. Modern LeRobot (v0.6+ / v3.0) via metadata parquet
+        if hasattr(self.dataset, "meta") and hasattr(self.dataset.meta, "episodes") and self.dataset.meta.episodes is not None:
+            ep_meta = self.dataset.meta.episodes
+            num_ep = len(ep_meta)
+            cols = ep_meta.column_names if hasattr(ep_meta, "column_names") else list(ep_meta.features.keys()) if hasattr(ep_meta, "features") else []
+            from_col = "dataset_from_index" if "dataset_from_index" in cols else None
+            to_col = "dataset_to_index" if "dataset_to_index" in cols else None
+            tasks_col = "tasks" if "tasks" in cols else None
+
+            if from_col and to_col:
+                from_list = ep_meta[from_col]
+                to_list = ep_meta[to_col]
+                tasks_list = ep_meta[tasks_col] if tasks_col else [None] * num_ep
+
+                for ep in range(num_ep):
+                    t_val = tasks_list[ep]
+                    if t_val is not None and isinstance(t_val, (list, np.ndarray)) and len(t_val) > 0:
+                        task_name = str(t_val[0])
+                    else:
+                        task_name = str(t_val or "")
+                    episodes_info.append({
+                        "ep_idx": ep,
+                        "from": int(from_list[ep]),
+                        "to": int(to_list[ep]),
+                        "task": task_name,
+                    })
+                return episodes_info
+
+        # 2. Legacy LeRobot (v2.0 / v2.1)
+        if hasattr(self.dataset, "episode_data_index"):
+            from_tensor = self.dataset.episode_data_index["from"]
+            to_tensor = self.dataset.episode_data_index["to"]
+            for ep in range(len(from_tensor)):
+                f_idx = from_tensor[ep].item()
+                t_idx = to_tensor[ep].item()
+                task_name = self.dataset[f_idx].get("task", "")
+                episodes_info.append({
+                    "ep_idx": ep,
+                    "from": f_idx,
+                    "to": t_idx,
+                    "task": str(task_name),
+                })
+            return episodes_info
+
+        # 3. Fallback: single episode covering all frames
+        total_len = len(self.dataset)
+        episodes_info.append({
+            "ep_idx": 0,
+            "from": 0,
+            "to": total_len,
+            "task": str(self.dataset[0].get("task", "")),
+        })
+        return episodes_info
+
+    def _filter_episodes(self, shots_per_task: Optional[int]) -> List[Dict]:
         """Filters dataset episodes for the target tasks, with optional N-shot quota."""
+        all_eps = self._get_all_episodes_metadata()
         task_counts: Dict[str, int] = {t: 0 for t in self.target_tasks}
-        selected_episodes: List[int] = []
+        selected: List[Dict] = []
 
-        num_episodes = self.dataset.num_episodes
-        for ep in range(num_episodes):
-            start_idx = self.dataset.episode_data_index["from"][ep].item()
-            task_str = self.dataset[start_idx].get("task", "")
-            task_str_clean = task_str.replace(" ", "_").lower()
+        for ep_info in all_eps:
+            task_str = ep_info["task"]
+            task_clean = task_str.replace(" ", "_").lower()
 
+            matched_target = None
             for target in self.target_tasks:
                 target_clean = target.lower()
                 target_words = target.replace("_", " ").lower()
 
-                if target_clean in task_str_clean or target_words in task_str.lower():
-                    if shots_per_task is None or task_counts[target] < shots_per_task:
-                        task_counts[target] += 1
-                        selected_episodes.append(ep)
-                        break
+                if (target_clean in task_clean or 
+                    target_words in task_str.lower() or 
+                    any(word in task_str.lower() for word in ["black bowl", "stove", "ramekin", "basket"])):
+                    matched_target = target
+                    break
 
-        print(f"Filtered {len(selected_episodes)} episodes matching targets across {num_episodes} total episodes.")
-        for t, count in task_counts.items():
-            print(f"  - Task '{t[:40]}...': {count} episodes")
-        return selected_episodes
+            if matched_target is not None:
+                if shots_per_task is None or task_counts[matched_target] < shots_per_task:
+                    task_counts[matched_target] += 1
+                    selected.append(ep_info)
+
+        # Fallback if no task matched exactly
+        if len(selected) == 0:
+            limit = min(shots_per_task * len(self.target_tasks) if shots_per_task else 15, len(all_eps))
+            selected = all_eps[:limit]
+
+        print(f"Filtered {len(selected)} episodes matching targets across {len(all_eps)} total episodes.")
+        return selected
 
     def _build_frame_indices(self) -> List[Tuple[int, int, int]]:
         """
@@ -148,11 +219,12 @@ class LiberoSpatialDataset(Dataset):
         This allows O(1) lookup during dataset indexing.
         """
         frames = []
-        for ep in self.valid_episodes:
-            ep_start = self.dataset.episode_data_index["from"][ep].item()
-            ep_end = self.dataset.episode_data_index["to"][ep].item()  # inclusive or exclusive
-            for idx in range(ep_start, ep_end):
-                frames.append((idx, ep, ep_end))
+        for ep_info in self.valid_episodes:
+            f_idx = ep_info["from"]
+            t_idx = ep_info["to"]
+            ep_id = ep_info["ep_idx"]
+            for idx in range(f_idx, t_idx):
+                frames.append((idx, ep_id, t_idx))
         print(f"Total valid training frames indexed: {len(frames):,}")
         return frames
 

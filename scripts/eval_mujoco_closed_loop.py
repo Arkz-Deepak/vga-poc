@@ -432,7 +432,7 @@ def main():
                         help="Path to trained VGA checkpoint")
     parser.add_argument("--stats_path", type=str, default="configs/action_stats.json",
                         help="Path to action normalization stats")
-    parser.add_argument("--num_episodes", type=int, default=5,
+    parser.add_argument("--num_episodes", "--episodes", dest="num_episodes", type=int, default=5,
                         help="Number of rollouts per task")
     parser.add_argument("--max_steps", type=int, default=280,
                         help="Maximum simulation steps per episode")

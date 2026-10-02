@@ -41,7 +41,10 @@ import numpy as np
 
 # Download and inspect dataset
 print("Loading LIBERO dataset metadata from Hugging Face...")
-# from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
+# try:
+#     from lerobot.datasets.lerobot_dataset import LeRobotDataset
+# except ImportError:
+#     from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 # dataset = LeRobotDataset("lerobot/libero", split="train")
 # print(f"Total episodes available: {dataset.num_episodes}")
 # print(f"Total frames: {dataset.num_frames}")

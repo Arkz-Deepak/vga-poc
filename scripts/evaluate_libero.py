@@ -162,7 +162,9 @@ def evaluate_checkpoint(
 
     # Load weights
     ckpt = torch.load(checkpoint_path, map_location=device)
-    if "model_state_dict" in ckpt:
+    if "policy_state_dict" in ckpt:
+        state_dict = ckpt["policy_state_dict"]
+    elif "model_state_dict" in ckpt:
         state_dict = ckpt["model_state_dict"]
     elif "policy" in ckpt:
         state_dict = ckpt["policy"]
@@ -397,18 +399,56 @@ def main():
     print("=================================================================")
     print(f"Device: {args.device}")
 
+    def resolve_file(path_str: Optional[str]) -> Optional[str]:
+        if not path_str:
+            return None
+        if os.path.isfile(path_str):
+            return path_str
+        basename = os.path.basename(path_str)
+        search_dirs = [
+            ".",
+            "checkpoints",
+            "configs",
+            str(root_dir),
+            os.path.join(str(root_dir), "checkpoints"),
+            os.path.join(str(root_dir), "configs"),
+            "/kaggle/working",
+            "/kaggle/working/checkpoints",
+            "/kaggle/working/vga-poc",
+            "/kaggle/working/vga-poc/checkpoints",
+            "/kaggle/working/vga-poc/configs",
+        ]
+        for d in search_dirs:
+            candidate = os.path.join(d, basename)
+            if os.path.isfile(candidate):
+                return candidate
+            candidate_rel = os.path.join(d, path_str)
+            if os.path.isfile(candidate_rel):
+                return candidate_rel
+        return None
+
     # 1. Load Normalizer
-    normalizer = Normalizer(stats_path=args.stats_path)
-    print(f"Loaded normalizer stats from {args.stats_path}")
+    resolved_stats = resolve_file(args.stats_path) or "configs/action_stats.json"
+    normalizer = Normalizer(stats_path=resolved_stats)
+    print(f"Loaded normalizer stats from {resolved_stats}")
 
     # 2. Ingest LeRobot Dataset and create strictly held-out test split
     print("\n--- 1. Loading Held-Out Test Episodes ---")
     try:
-        from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
-        raw_dataset = LeRobotDataset("lerobot/libero_spatial_image")
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+    except ImportError:
+        try:
+            from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
+        except ImportError:
+            from lerobot.datasets import LeRobotDataset
+
+    repo_id = "lerobot/libero_spatial_image"
+    try:
+        raw_dataset = LeRobotDataset(repo_id)
     except Exception as e:
-        print(f"Could not load LeRobotDataset: {e}")
-        return
+        print(f"Could not load {repo_id}: {e}. Retrying with lerobot/libero_spatial...")
+        repo_id = "lerobot/libero_spatial"
+        raw_dataset = LeRobotDataset(repo_id)
 
     test_dataset = LiberoSpatialDataset(
         lerobot_dataset=raw_dataset,
@@ -434,17 +474,12 @@ def main():
     sample_gt = None
 
     checkpoints_to_eval = []
-    if os.path.exists(args.ckpt_5shot):
-        checkpoints_to_eval.append(("5-Shot VGA", args.ckpt_5shot))
-    if os.path.exists(args.ckpt_10shot):
-        checkpoints_to_eval.append(("10-Shot VGA", args.ckpt_10shot))
-
-    if not checkpoints_to_eval:
-        print("\n⚠️ No checkpoint found on disk. Checking default fallback paths...")
-        # Check if either exists
-        for name, p in [("5-Shot VGA", "checkpoints/vga_libero_5shot.pt"), ("10-Shot VGA", "checkpoints/vga_libero_10shot.pt")]:
-            if os.path.exists(p):
-                checkpoints_to_eval.append((name, p))
+    p5 = resolve_file(args.ckpt_5shot) or resolve_file("vga_libero_5shot.pt")
+    if p5:
+        checkpoints_to_eval.append(("5-Shot VGA", p5))
+    p10 = resolve_file(args.ckpt_10shot) or resolve_file("vga_libero_10shot.pt")
+    if p10:
+        checkpoints_to_eval.append(("10-Shot VGA", p10))
 
     if not checkpoints_to_eval:
         print("ERROR: Neither checkpoint exists. Please specify valid --ckpt_5shot or --ckpt_10shot.")

@@ -44,6 +44,8 @@ class ModelConfig:
     dt: float = 0.02              # 20 ms per step -> 50 Hz control frequency
     schmitt_low: float = 0.40     # Gripper release threshold (g_bar < 0.40, raw < -0.20)
     schmitt_high: float = 0.60    # Gripper close threshold (g_bar > 0.60, raw > +0.20)
+    min_hold_steps: int = 60      # Minimum steps (3.0s @ 20Hz) to keep gripper locked shut once grasped
+    min_approach_steps: int = 25  # Pre-grasp guard: force gripper wide open during initial descent
     async_trigger_step: int = 11  # Step at which background inference begins (70% buffer consumption)
 
     # 6. Benchmark Tasks (LIBERO-Spatial)

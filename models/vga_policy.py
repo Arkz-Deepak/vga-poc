@@ -20,7 +20,7 @@ Mathematical and Architectural Summary:
 
 from collections import deque
 from pathlib import Path
-from typing import Dict, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -40,6 +40,7 @@ class VGAPolicy(nn.Module):
 
     def __init__(
         self,
+        cfg: Optional[Any] = None,
         normalizer: Optional[Normalizer] = None,
         vis_dim: int = 768,
         lm_dim: int = 960,
@@ -55,11 +56,28 @@ class VGAPolicy(nn.Module):
         euler_steps: int = 4,
         beta_jerk: float = 0.5,
         w_rot: float = 0.01,
-        schmitt_low: float = 0.35,
-        schmitt_high: float = 0.65,
+        schmitt_low: float = 0.40,
+        schmitt_high: float = 0.60,
+        min_hold_steps: int = 60,
         sigma_min: float = 1e-4,
     ):
         super().__init__()
+        if cfg is not None:
+            vis_dim = getattr(cfg, "vis_dim", vis_dim)
+            lm_dim = getattr(cfg, "lm_dim", lm_dim)
+            img_size = getattr(cfg, "img_size", img_size)
+            patch_size = getattr(cfg, "patch_size", patch_size)
+            num_visual_tokens = getattr(cfg, "num_visual_tokens", num_visual_tokens)
+            action_dim = getattr(cfg, "action_dim", action_dim)
+            action_horizon = getattr(cfg, "action_horizon", action_horizon)
+            prefix_len = getattr(cfg, "prefix_len", prefix_len)
+            dit_layers = getattr(cfg, "dit_layers", dit_layers)
+            euler_steps = getattr(cfg, "euler_steps", euler_steps)
+            beta_jerk = getattr(cfg, "beta_jerk", beta_jerk)
+            w_rot = getattr(cfg, "w_rot", w_rot)
+            schmitt_low = getattr(cfg, "schmitt_low", schmitt_low)
+            schmitt_high = getattr(cfg, "schmitt_high", schmitt_high)
+            min_hold_steps = getattr(cfg, "min_hold_steps", min_hold_steps)
         self.action_dim = action_dim
         self.action_horizon = action_horizon
         self.prefix_len = prefix_len
@@ -102,6 +120,7 @@ class VGAPolicy(nn.Module):
         self.gripper_controller = SchmittTriggerGripper(
             low_thresh=schmitt_low,
             high_thresh=schmitt_high,
+            min_hold_steps=min_hold_steps,
         )
 
         # 5. Runtime Action Chunk Queue for Rolling Rollouts
@@ -314,14 +333,15 @@ class VGAPolicy(nn.Module):
             else:
                 chunk_phys = chunk_norm
 
-            # Push all 16 steps into queue
+            # Push all 16 steps into queue in physical units
             chunk_cpu = chunk_phys.squeeze(0).cpu()  # [16, 7]
             for step_idx in range(self.action_horizon):
-                step_action = chunk_cpu[step_idx].clone()
-                # Apply Schmitt Trigger to gripper dimension (dim 6)
-                raw_gripper = step_action[6].item()
-                step_action[6] = self.gripper_controller.step(raw_gripper)
-                self.action_queue.append(step_action)
+                self.action_queue.append(chunk_cpu[step_idx].clone())
 
-        # 2. Pop the next ready action from queue
-        return self.action_queue.popleft()
+        # 2. Pop the next ready action from queue and apply Schmitt Trigger per physical step
+        step_action = self.action_queue.popleft()
+        if self.gripper_controller is not None:
+            raw_gripper = step_action[6].item()
+            step_action[6] = self.gripper_controller.step(raw_gripper)
+
+        return step_action

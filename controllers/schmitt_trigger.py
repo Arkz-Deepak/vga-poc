@@ -32,7 +32,7 @@ class SchmittTriggerGripper:
         self,
         low_thresh: float = 0.40,
         high_thresh: float = 0.60,
-        min_hold_steps: int = 20,
+        min_hold_steps: int = 60,
         open_val: float = -1.0,
         close_val: float = 1.0,
         initial_state: float = None,

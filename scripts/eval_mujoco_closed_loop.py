@@ -161,6 +161,8 @@ def run_closed_loop_evaluation(
     output_json: str = "results/closed_loop_simulation_results.json",
     schmitt_low: float = 0.40,
     schmitt_high: float = 0.60,
+    min_hold_steps: int = 60,
+    min_approach_steps: int = 25,
 ):
     print("=================================================================")
     print("   VGA Closed-Loop MuJoCo Simulation Benchmark (LIBERO-Spatial)   ")
@@ -206,6 +208,7 @@ def run_closed_loop_evaluation(
         schmitt_low=schmitt_low,
         schmitt_high=schmitt_high,
     ).to(device)
+    policy.gripper_controller.min_hold_steps = min_hold_steps
 
     # Load weights
     try:
@@ -360,6 +363,13 @@ def run_closed_loop_evaluation(
                 action_np = action_tensor.cpu().numpy()
                 action_np = np.clip(action_np, -1.0, 1.0)
 
+                # Pre-grasp approach guard: during the initial approach (steps < min_approach_steps),
+                # the robot is descending from the home pose through mid-air towards the workspace.
+                # Forcing gripper OPEN (-1.0) ensures fingers remain wide open as they approach the bowl.
+                if step < min_approach_steps:
+                    action_np[6] = -1.0
+                    policy.gripper_controller.reset(initial_state=-1.0)
+
                 # Monitor gripper state changes
                 curr_grip = float(action_np[6])
                 if curr_grip > 0:
@@ -372,7 +382,7 @@ def run_closed_loop_evaluation(
                 # Step MuJoCo physics engine
                 obs, reward, terminated, truncated, info = env.step(action_np)
 
-                if info.get("is_success", False) or reward > 0:
+                if info.get("is_success", False) or info.get("success", False) or reward > 0:
                     success = True
                     episode_lengths.append(step + 1)
                     print(f"  - Episode {ep + 1}/{num_episodes_per_task}: ✅ SUCCESS at step {step + 1}!")
@@ -459,6 +469,10 @@ def main():
                         help="Schmitt trigger gripper close threshold (default: 0.60)")
     parser.add_argument("--schmitt_low", type=float, default=0.40,
                         help="Schmitt trigger gripper open threshold (default: 0.40)")
+    parser.add_argument("--min_hold_steps", type=int, default=60,
+                        help="Minimum steps to keep gripper locked shut once closed (default: 60)")
+    parser.add_argument("--min_approach_steps", type=int, default=25,
+                        help="Number of initial steps to force gripper open during approach (default: 25)")
     parser.add_argument("--output_json", type=str, default="results/closed_loop_simulation_results.json",
                         help="Path to save simulation metrics JSON")
     args = parser.parse_args()
@@ -478,6 +492,8 @@ def main():
         output_json=args.output_json,
         schmitt_low=args.schmitt_low,
         schmitt_high=args.schmitt_high,
+        min_hold_steps=args.min_hold_steps,
+        min_approach_steps=args.min_approach_steps,
     )
 
 

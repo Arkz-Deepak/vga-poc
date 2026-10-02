@@ -204,6 +204,58 @@ class VGAPolicy(nn.Module):
         }
 
     @torch.no_grad()
+    def predict_chunk(
+        self,
+        image_front: torch.Tensor,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        camera_origin: Optional[torch.Tensor] = None,
+        prefix_waypoints: Optional[torch.Tensor] = None,
+        apply_schmitt: bool = True,
+    ) -> torch.Tensor:
+        """
+        Predicts an entire 16-step action chunk in physical space [B, 16, 7].
+
+        Args:
+            image_front: Camera observation [B, 3, 256, 256]
+            input_ids: Tokenized instruction IDs [B, seq_len]
+            attention_mask: Optional language attention mask [B, seq_len]
+            camera_origin: Optional camera position in robot base frame [B, 3]
+            prefix_waypoints: Optional P=4 tail waypoints from previous chunk [B, 4, 7]
+            apply_schmitt: Whether to apply Schmitt trigger hysteresis to gripper
+        Returns:
+            chunk_phys: Unnormalized physical action trajectories [B, 16, 7]
+        """
+        if image_front.dtype == torch.uint8:
+            image_front = (image_front.float() / 255.0) * 2.0 - 1.0
+
+        context = self.encoder(
+            image_front=image_front,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            camera_origin=camera_origin,
+        )
+
+        chunk_norm = self.expert.sample_actions(
+            context=context,
+            prefix_waypoints=prefix_waypoints,
+        )
+
+        if self.normalizer is not None:
+            chunk_phys = self.normalizer.unnormalize(chunk_norm)
+        else:
+            chunk_phys = chunk_norm
+
+        if apply_schmitt:
+            B = chunk_phys.shape[0]
+            for b in range(B):
+                for t in range(self.action_horizon):
+                    raw_g = chunk_phys[b, t, 6].item()
+                    chunk_phys[b, t, 6] = self.gripper_controller.step(raw_g)
+
+        return chunk_phys
+
+    @torch.no_grad()
     def select_action(
         self,
         batch: Dict[str, torch.Tensor],

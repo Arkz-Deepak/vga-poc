@@ -90,6 +90,7 @@ class LiberoSpatialDataset(Dataset):
         action_horizon: int = 16,
         target_tasks: Optional[List[str]] = None,
         shots_per_task: Optional[int] = None,
+        skip_per_task: int = 0,
         img_size: int = 256,
     ):
         """
@@ -99,12 +100,14 @@ class LiberoSpatialDataset(Dataset):
             action_horizon: Number of future action steps to chunk (default: 16)
             target_tasks: List of task names/substrings to include (default: 3 PoC tasks)
             shots_per_task: If specified, limit the dataset to N episodes per task (e.g. 5 or 10)
+            skip_per_task: Number of initial episodes per task to skip (useful for held-out test splits)
             img_size: Image spatial resolution for SigLIP vision backbone (default: 256)
         """
         self.dataset = lerobot_dataset
         self.normalizer = normalizer
         self.action_horizon = action_horizon
         self.img_size = img_size
+        self.skip_per_task = skip_per_task
         self.target_tasks = target_tasks or [
             "pick_up_the_black_bowl_between_the_plate_and_the_ramekin_and_place_it_on_the_plate",
             "pick_up_the_alphabet_soup_and_place_it_in_the_basket",
@@ -112,7 +115,7 @@ class LiberoSpatialDataset(Dataset):
         ]
 
         # 1. Index valid episodes matching target tasks
-        self.valid_episodes = self._filter_episodes(shots_per_task)
+        self.valid_episodes = self._filter_episodes(shots_per_task, skip_per_task)
         # 2. Build frame index mapping: dataset_idx -> (episode_id, frame_in_episode)
         self.valid_frames = self._build_frame_indices()
 
@@ -179,9 +182,10 @@ class LiberoSpatialDataset(Dataset):
         })
         return episodes_info
 
-    def _filter_episodes(self, shots_per_task: Optional[int]) -> List[Dict]:
-        """Filters dataset episodes for the target tasks, with optional N-shot quota."""
+    def _filter_episodes(self, shots_per_task: Optional[int], skip_per_task: int = 0) -> List[Dict]:
+        """Filters dataset episodes for the target tasks, with optional N-shot quota and initial skip offset."""
         all_eps = self._get_all_episodes_metadata()
+        task_seen: Dict[str, int] = {t: 0 for t in self.target_tasks}
         task_counts: Dict[str, int] = {t: 0 for t in self.target_tasks}
         selected: List[Dict] = []
 
@@ -201,16 +205,19 @@ class LiberoSpatialDataset(Dataset):
                     break
 
             if matched_target is not None:
-                if shots_per_task is None or task_counts[matched_target] < shots_per_task:
-                    task_counts[matched_target] += 1
-                    selected.append(ep_info)
+                task_seen[matched_target] += 1
+                if task_seen[matched_target] > skip_per_task:
+                    if shots_per_task is None or task_counts[matched_target] < shots_per_task:
+                        task_counts[matched_target] += 1
+                        selected.append(ep_info)
 
         # Fallback if no task matched exactly
         if len(selected) == 0:
-            limit = min(shots_per_task * len(self.target_tasks) if shots_per_task else 15, len(all_eps))
-            selected = all_eps[:limit]
+            offset = skip_per_task * len(self.target_tasks)
+            limit = min(shots_per_task * len(self.target_tasks) if shots_per_task else 15, len(all_eps) - offset)
+            selected = all_eps[offset : offset + limit]
 
-        print(f"Filtered {len(selected)} episodes matching targets across {len(all_eps)} total episodes.")
+        print(f"Filtered {len(selected)} episodes matching targets across {len(all_eps)} total episodes (skipped initial {skip_per_task}/task).")
         return selected
 
     def _build_frame_indices(self) -> List[Tuple[int, int, int]]:

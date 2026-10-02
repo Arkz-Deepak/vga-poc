@@ -52,6 +52,14 @@ except ImportError:
     pass
 
 from configs.poc_config import ModelConfig, cfg
+
+# Allow ModelConfig in PyTorch 2.6+ safe globals for unpickling
+try:
+    import torch.serialization
+    if hasattr(torch.serialization, "add_safe_globals"):
+        torch.serialization.add_safe_globals([ModelConfig])
+except Exception:
+    pass
 from data.dataset import LiberoSpatialDataset, Normalizer
 from models.vga_policy import VGAPolicy
 
@@ -160,8 +168,11 @@ def evaluate_checkpoint(
         schmitt_high=cfg.schmitt_high,
     ).to(device)
 
-    # Load weights
-    ckpt = torch.load(checkpoint_path, map_location=device)
+    # Load weights (handle PyTorch 2.6+ weights_only default)
+    try:
+        ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    except TypeError:
+        ckpt = torch.load(checkpoint_path, map_location=device)
     if "policy_state_dict" in ckpt:
         state_dict = ckpt["policy_state_dict"]
     elif "model_state_dict" in ckpt:

@@ -159,8 +159,8 @@ def run_closed_loop_evaluation(
     record_videos: bool = True,
     video_dir: str = "results/videos",
     output_json: str = "results/closed_loop_simulation_results.json",
-    schmitt_low: float = 0.45,
-    schmitt_high: float = 0.55,
+    schmitt_low: float = 0.40,
+    schmitt_high: float = 0.60,
 ):
     print("=================================================================")
     print("   VGA Closed-Loop MuJoCo Simulation Benchmark (LIBERO-Spatial)   ")
@@ -455,10 +455,10 @@ def main():
                         help="Whether to save MP4 video replays")
     parser.add_argument("--video_dir", type=str, default="results/videos",
                         help="Directory to save MP4 videos")
-    parser.add_argument("--schmitt_high", type=float, default=0.55,
-                        help="Schmitt trigger gripper close threshold (default: 0.55)")
-    parser.add_argument("--schmitt_low", type=float, default=0.45,
-                        help="Schmitt trigger gripper open threshold (default: 0.45)")
+    parser.add_argument("--schmitt_high", type=float, default=0.60,
+                        help="Schmitt trigger gripper close threshold (default: 0.60)")
+    parser.add_argument("--schmitt_low", type=float, default=0.40,
+                        help="Schmitt trigger gripper open threshold (default: 0.40)")
     parser.add_argument("--output_json", type=str, default="results/closed_loop_simulation_results.json",
                         help="Path to save simulation metrics JSON")
     args = parser.parse_args()

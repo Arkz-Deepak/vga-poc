@@ -42,8 +42,8 @@ class ModelConfig:
 
     # 5. Controller & Inference
     dt: float = 0.02              # 20 ms per step -> 50 Hz control frequency
-    schmitt_low: float = 0.45     # Gripper release threshold (g_bar < 0.45, raw < -0.10)
-    schmitt_high: float = 0.55    # Gripper close threshold (g_bar > 0.55, raw > +0.10)
+    schmitt_low: float = 0.40     # Gripper release threshold (g_bar < 0.40, raw < -0.20)
+    schmitt_high: float = 0.60    # Gripper close threshold (g_bar > 0.60, raw > +0.20)
     async_trigger_step: int = 11  # Step at which background inference begins (70% buffer consumption)
 
     # 6. Benchmark Tasks (LIBERO-Spatial)

@@ -30,25 +30,29 @@ class SchmittTriggerGripper:
     """
     def __init__(
         self,
-        low_thresh: float = 0.45,
-        high_thresh: float = 0.55,
+        low_thresh: float = 0.40,
+        high_thresh: float = 0.60,
+        min_hold_steps: int = 20,
         open_val: float = -1.0,
         close_val: float = 1.0,
         initial_state: float = None,
     ):
         self.low_thresh = low_thresh
         self.high_thresh = high_thresh
+        self.min_hold_steps = min_hold_steps
         self.open_val = float(open_val)
         self.close_val = float(close_val)
         self.current_state = float(initial_state if initial_state is not None else open_val)
+        self.steps_in_state = 0
 
     def reset(self, initial_state: float = None):
         """Resets the internal latch state."""
         self.current_state = float(initial_state if initial_state is not None else self.open_val)
+        self.steps_in_state = 0
 
     def step(self, raw_gripper_action: Union[float, torch.Tensor]) -> float:
         """
-        Processes a single predicted gripper output.
+        Processes a single predicted gripper output with temporal debounce hold.
 
         Args:
             raw_gripper_action: Continuous prediction in [-1.0, 1.0].
@@ -63,13 +67,19 @@ class SchmittTriggerGripper:
 
         # 1. Affine normalization: [-1, 1] -> [0, 1]
         g_bar = (val + 1.0) / 2.0
+        self.steps_in_state += 1
 
-        # 2. Hysteresis latch
-        if g_bar > self.high_thresh:
-            self.current_state = self.close_val  # Close gripper (+1.0)
-        elif g_bar < self.low_thresh:
-            self.current_state = self.open_val   # Open gripper (-1.0)
-        # else: retain previous state (hysteresis deadband prevents chattering)
+        # 2. Hysteresis latch with temporal anti-chatter hold
+        if self.current_state == self.close_val:
+            # Enforce minimum hold time once closed to prevent premature release / chatter
+            if self.steps_in_state >= self.min_hold_steps and g_bar < self.low_thresh:
+                self.current_state = self.open_val
+                self.steps_in_state = 0
+        else:
+            # Enforce minimum hold time once open to prevent jitter on approach
+            if self.steps_in_state >= 5 and g_bar > self.high_thresh:
+                self.current_state = self.close_val
+                self.steps_in_state = 0
 
         return self.current_state
 

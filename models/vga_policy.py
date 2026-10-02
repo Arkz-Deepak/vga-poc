@@ -114,6 +114,10 @@ class VGAPolicy(nn.Module):
         self.prev_chunk_tail = None
         self.gripper_controller.reset()
 
+    def forward(self, *args, **kwargs):
+        """Default forward delegates to forward_loss for PyTorch Distributed / DataParallel compatibility."""
+        return self.forward_loss(*args, **kwargs)
+
     def forward_loss(
         self,
         image_front: torch.Tensor,

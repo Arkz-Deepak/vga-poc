@@ -1,15 +1,12 @@
 """
 Training & Fine-Tuning Pipeline for VGA Policy on LIBERO-Spatial Benchmark.
 
-Objectives:
-1. 5-Shot and 10-Shot Demonstration Learning:
-   Fine-tunes the lightweight (298M parameter) VGA Policy on 3 spatial manipulation tasks.
-2. Kinematic Loss Scheduling:
-   Linearly anneals lambda_kin from 0.0 to 0.05 over warmup steps to allow initial flow
-   matching convergence before enforcing jerk and acceleration smoothness.
-3. Post-Training Latency & Jerk Benchmark:
-   Measures 4-step Euler ODE rollout latency on GPU to verify the <= 18 ms real-time ceiling
-   against the SmolVLA-450M baseline (which achieved 643.75 ms on Tesla T4).
+Supports:
+1. Single GPU (Tesla T4, P100, V100, A100).
+2. Multi-GPU via PyTorch DDP (`torchrun --nproc_per_node=2 scripts/train_vga.py`)
+   or automatic `nn.DataParallel` when running on Kaggle GPU T4 x 2.
+3. 5-Shot and 10-Shot Demonstration Learning with linear kinematic loss annealing.
+4. Real-time post-training GPU latency benchmarking against the 18 ms ceiling.
 """
 
 import argparse
@@ -29,6 +26,7 @@ if str(root_dir) not in sys.path:
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
 # Upstream compatibility guard for PyAV
 try:
@@ -46,25 +44,44 @@ from models.vga_policy import VGAPolicy
 
 def train_vga(
     shots: int = 5,
-    batch_size: int = 16,
-    num_steps: int = 1000,
+    batch_size: int = 8,
+    num_steps: int = 300,
     lr: float = 1e-4,
-    device: str = "cuda" if torch.cuda.is_available() else "cpu",
     output_dir: str = "checkpoints",
 ):
-    print("=" * 65)
-    print(f"      VGA PoC Training Run: {shots}-Shot Demo Benchmark       ")
-    print("=" * 65)
-    print(f"Target Device: {device}")
-    if device == "cuda":
-        print(f"GPU: {torch.cuda.get_device_name(0)}")
-        print(f"VRAM Available: {torch.cuda.get_device_properties(0).total_memory / (1024 ** 3):.2f} GB")
+    # 0. Distributed / Multi-GPU Process Initialization
+    is_distributed = int(os.environ.get("WORLD_SIZE", 1)) > 1
+    if is_distributed:
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        world_size = int(os.environ.get("WORLD_SIZE", 1))
+        torch.cuda.set_device(local_rank)
+        torch.distributed.init_process_group("nccl")
+        device = f"cuda:{local_rank}"
+    else:
+        local_rank = 0
+        world_size = 1
+        device = "cuda:0" if torch.cuda.is_available() else "cpu"
+
+    is_main_process = (local_rank == 0)
+    num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+
+    if is_main_process:
+        print("=" * 65)
+        print(f"      VGA PoC Training Run: {shots}-Shot Demo Benchmark       ")
+        print("=" * 65)
+        print(f"Target Primary Device: {device} (Total Available GPUs: {num_gpus})")
+        if torch.cuda.is_available():
+            for g in range(num_gpus):
+                name = torch.cuda.get_device_name(g)
+                mem = torch.cuda.get_device_properties(g).total_memory / (1024 ** 3)
+                print(f"  - GPU {g}: {name} ({mem:.2f} GB VRAM)")
 
     cfg = ModelConfig()
     pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # 1. Ingest Dataset & Empirical Normalizer
-    print("\n--- 1. Dataset Ingestion & Demonstration Subsetting ---")
+    if is_main_process:
+        print("\n--- 1. Dataset Ingestion & Demonstration Subsetting ---")
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     repo_id = "lerobot/libero_spatial_image"
@@ -84,17 +101,20 @@ def train_vga(
         img_size=cfg.img_size,
     )
 
+    sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=local_rank, shuffle=True) if is_distributed else None
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=(sampler is None),
+        sampler=sampler,
         num_workers=2,
-        pin_memory=(device == "cuda"),
+        pin_memory=(torch.cuda.is_available()),
         drop_last=True,
     )
 
     # 2. Instantiate VGA Policy Network
-    print("\n--- 2. Instantiating VGA Policy ---")
+    if is_main_process:
+        print("\n--- 2. Instantiating VGA Policy ---")
     policy = VGAPolicy(
         normalizer=normalizer,
         vis_dim=cfg.vis_dim,
@@ -116,7 +136,25 @@ def train_vga(
     ).to(device)
 
     total_params = sum(p.numel() for p in policy.parameters())
-    print(f"Total Parameters: {total_params:,} ({total_params / 1e6:.1f}M) <= 0.5B ceiling")
+    if is_main_process:
+        print(f"Total Parameters: {total_params:,} ({total_params / 1e6:.1f}M) <= 0.5B ceiling")
+
+    # Multi-GPU wrapping
+    if is_distributed:
+        policy = nn.parallel.DistributedDataParallel(
+            policy,
+            device_ids=[local_rank],
+            output_device=local_rank,
+            find_unused_parameters=True,
+        )
+        policy_raw = policy.module
+    elif num_gpus > 1 and device != "cpu":
+        if is_main_process:
+            print(f"🚀 Splitting load across {num_gpus} GPUs using PyTorch DataParallel!")
+        policy = nn.DataParallel(policy)
+        policy_raw = policy.module
+    else:
+        policy_raw = policy
 
     # 3. Setup Optimizer & Cosine Schedule
     optimizer = torch.optim.AdamW(
@@ -127,14 +165,17 @@ def train_vga(
     )
 
     # 4. Training Loop
-    print(f"\n--- 3. Beginning Fine-Tuning ({num_steps} Steps, Batch Size: {batch_size}) ---")
+    if is_main_process:
+        eff_batch = batch_size * (world_size if is_distributed else max(1, num_gpus))
+        print(f"\n--- 3. Beginning Fine-Tuning ({num_steps} Steps, Effective Batch Size: {eff_batch}) ---")
+
     policy.train()
     step = 0
     t_start = time.time()
     data_iter = iter(train_loader)
 
     # Tokenizer helper
-    tok = policy.encoder.get_tokenizer()
+    tok = policy_raw.encoder.get_tokenizer()
     if tok is not None and getattr(tok, "pad_token", None) is None:
         tok.pad_token = tok.eos_token
 
@@ -162,7 +203,7 @@ def train_vga(
         curr_lambda_kin = cfg.max_lambda_kin * min(1.0, step / max(1, cfg.kinematic_anneal_steps))
 
         optimizer.zero_grad()
-        loss_dict = policy.forward_loss(
+        loss_dict = policy_raw.forward_loss(
             image_front=img_front,
             input_ids=input_ids,
             actions=actions,
@@ -179,7 +220,7 @@ def train_vga(
 
         step += 1
 
-        if step % 50 == 0 or step == num_steps:
+        if is_main_process and (step % 50 == 0 or step == num_steps):
             elapsed = time.time() - t_start
             flow_l = loss_dict["flow_loss"].item()
             acc_l = loss_dict["acc_loss"].item()
@@ -194,63 +235,67 @@ def train_vga(
                 f"Elapsed: {elapsed:.1f}s"
             )
 
-    # 5. Save Checkpoint
-    save_path = os.path.join(output_dir, f"vga_libero_{shots}shot.pt")
-    torch.save(
-        {
-            "step": step,
-            "policy_state_dict": policy.state_dict(),
-            "config": cfg,
-            "shots": shots,
-        },
-        save_path,
-    )
-    print(f"\n✅ Checkpoint saved to: {save_path}")
+    # 5. Save Checkpoint (Only on main process)
+    if is_main_process:
+        save_path = os.path.join(output_dir, f"vga_libero_{shots}shot.pt")
+        torch.save(
+            {
+                "step": step,
+                "policy_state_dict": policy_raw.state_dict(),
+                "config": cfg,
+                "shots": shots,
+            },
+            save_path,
+        )
+        print(f"\n✅ Checkpoint saved to: {save_path}")
 
-    # 6. Benchmark Real-Time Policy Latency on GPU vs Baseline
-    print("\n--- 4. Benchmarking VGA Real-Time Inference Latency ---")
-    policy.eval()
-    policy.reset()
+        # 6. Benchmark Real-Time Policy Latency on GPU vs Baseline
+        print("\n--- 4. Benchmarking VGA Real-Time Inference Latency ---")
+        policy_raw.eval()
+        policy_raw.reset()
 
-    sample_batch = {
-        "image_front": img_front[:1],
-        "input_ids": input_ids[:1],
-        "attention_mask": att_mask[:1],
-    }
+        sample_batch = {
+            "image_front": img_front[:1],
+            "input_ids": input_ids[:1],
+            "attention_mask": att_mask[:1],
+        }
 
-    if device == "cuda":
-        # Warmup passes
-        for _ in range(5):
-            policy.reset()
-            _ = policy.select_action(sample_batch)
+        if torch.cuda.is_available():
+            # Warmup passes
+            for _ in range(5):
+                policy_raw.reset()
+                _ = policy_raw.select_action(sample_batch)
 
-        torch.cuda.synchronize()
-        iters = 50
-        t0 = time.time()
-        for _ in range(iters):
-            policy.reset()
-            _ = policy.select_action(sample_batch)
-        torch.cuda.synchronize()
-        chunk_latency_ms = (time.time() - t0) / iters * 1000.0
+            torch.cuda.synchronize()
+            iters = 50
+            t0 = time.time()
+            for _ in range(iters):
+                policy_raw.reset()
+                _ = policy_raw.select_action(sample_batch)
+            torch.cuda.synchronize()
+            chunk_latency_ms = (time.time() - t0) / iters * 1000.0
 
-        print(f"✅ VGA Action-Chunk Latency (4-Step Euler ODE): {chunk_latency_ms:.2f} ms")
-        print(f"   Control Rate: {1000.0 / chunk_latency_ms:.1f} inferences/sec")
-        print(f"   Target Latency Ceiling: <= 18.0 ms")
-        print(f"   Baseline SmolVLA Latency: 643.75 ms (~1.6 inferences/sec)")
-        speedup = 643.75 / max(1e-3, chunk_latency_ms)
-        print(f"   🚀 Speedup vs SmolVLA Baseline: {speedup:.1f}x faster!")
+            print(f"✅ VGA Action-Chunk Latency (4-Step Euler ODE): {chunk_latency_ms:.2f} ms")
+            print(f"   Control Rate: {1000.0 / chunk_latency_ms:.1f} inferences/sec")
+            print(f"   Target Latency Ceiling: <= 18.0 ms")
+            print(f"   Baseline SmolVLA Latency: 643.75 ms (~1.6 inferences/sec)")
+            speedup = 643.75 / max(1e-3, chunk_latency_ms)
+            print(f"   🚀 Speedup vs SmolVLA Baseline: {speedup:.1f}x faster!")
 
-        if chunk_latency_ms <= 18.0:
-            print("   🎯 MEETS REAL-TIME ROBOTICS 50 Hz REQUIREMENT (<= 18 ms)!")
-    else:
-        print("Device is CPU. Skipping CUDA latency benchmark.")
+            if chunk_latency_ms <= 18.0:
+                print("   🎯 MEETS REAL-TIME ROBOTICS 50 Hz REQUIREMENT (<= 18 ms)!")
+        else:
+            print("Device is CPU. Skipping CUDA latency benchmark.")
+
+    if is_distributed:
+        torch.distributed.destroy_process_group()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--shots", type=int, default=5, help="Number of demo episodes per task (5 or 10)")
-    parser.add_argument("--steps", type=int, default=500, help="Number of training steps")
-    parser.add_argument("--batch_size", type=int, default=8, help="Batch size")
+    parser.add_argument("--steps", type=int, default=300, help="Number of training steps")
+    parser.add_argument("--batch_size", type=int, default=8, help="Batch size per GPU")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
     args = parser.parse_args()
 

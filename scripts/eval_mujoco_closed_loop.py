@@ -44,11 +44,31 @@ config_yaml = libero_dir / "config.yaml"
 try:
     import libero
     lib_root = pathlib.Path(libero.__file__).resolve().parent
+
+    # Candidate locations for init_states (.pruned_init files)
     init_dir = lib_root / "init_files"
-    for cand in [lib_root / "init_files", lib_root / "libero" / "init_files", lib_root / "init_states", lib_root / "libero" / "init_states"]:
+    init_candidates = [
+        lib_root / "init_files",
+        lib_root / "libero" / "init_files",
+        lib_root / "init_states",
+        lib_root / "libero" / "init_states",
+        pathlib.Path.home() / ".cache" / "libero" / "assets" / "init_files",
+        pathlib.Path.home() / ".cache" / "libero" / "init_files",
+        pathlib.Path.home() / ".cache" / "libero" / "assets",
+        pathlib.Path.home() / ".cache" / "libero",
+        pathlib.Path("/root/.cache/libero/assets/init_files"),
+        pathlib.Path("/root/.cache/libero/init_files"),
+        pathlib.Path("/root/.cache/libero/assets"),
+        pathlib.Path("/root/.cache/libero"),
+    ]
+    for cand in init_candidates:
         if cand.is_dir():
-            init_dir = cand
-            break
+            # Check if it contains .pruned_init files directly or in subfolders
+            if list(cand.rglob("*.pruned_init")):
+                init_dir = cand
+                break
+            elif not init_dir.is_dir():
+                init_dir = cand
 
     bddl_dir = lib_root / "bddl_files"
     for cand in [lib_root / "bddl_files", lib_root / "libero" / "bddl_files"]:
@@ -57,7 +77,14 @@ try:
             break
 
     assets_dir = lib_root / "assets"
-    for cand in [lib_root / "assets", lib_root / "libero" / "assets"]:
+    for cand in [
+        lib_root / "assets",
+        lib_root / "libero" / "assets",
+        pathlib.Path.home() / ".cache" / "libero" / "assets",
+        pathlib.Path("/root/.cache/libero/assets"),
+        pathlib.Path.home() / ".cache" / "libero",
+        pathlib.Path("/root/.cache/libero"),
+    ]:
         if cand.is_dir():
             assets_dir = cand
             break

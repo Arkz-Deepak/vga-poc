@@ -28,14 +28,23 @@ class SchmittTriggerGripper:
     """
     Stateful gripper controller implementing affine rescaling and hysteresis deadband filtering.
     """
-    def __init__(self, low_thresh: float = 0.35, high_thresh: float = 0.65, initial_state: float = 0.0):
+    def __init__(
+        self,
+        low_thresh: float = 0.35,
+        high_thresh: float = 0.65,
+        open_val: float = -1.0,
+        close_val: float = 1.0,
+        initial_state: float = None,
+    ):
         self.low_thresh = low_thresh
         self.high_thresh = high_thresh
-        self.current_state = float(initial_state)
+        self.open_val = float(open_val)
+        self.close_val = float(close_val)
+        self.current_state = float(initial_state if initial_state is not None else open_val)
 
-    def reset(self, initial_state: float = 0.0):
+    def reset(self, initial_state: float = None):
         """Resets the internal latch state."""
-        self.current_state = float(initial_state)
+        self.current_state = float(initial_state if initial_state is not None else self.open_val)
 
     def step(self, raw_gripper_action: Union[float, torch.Tensor]) -> float:
         """
@@ -45,7 +54,7 @@ class SchmittTriggerGripper:
             raw_gripper_action: Continuous prediction in [-1.0, 1.0].
 
         Returns:
-            Discretized stable gripper state: 1.0 (Closed) or 0.0 (Open).
+            Discretized stable gripper state: +1.0 (Closed) or -1.0 (Open).
         """
         if isinstance(raw_gripper_action, torch.Tensor):
             val = raw_gripper_action.item()
@@ -57,9 +66,9 @@ class SchmittTriggerGripper:
 
         # 2. Hysteresis latch
         if g_bar > self.high_thresh:
-            self.current_state = 1.0  # Close gripper
+            self.current_state = self.close_val  # Close gripper (+1.0)
         elif g_bar < self.low_thresh:
-            self.current_state = 0.0  # Open gripper
+            self.current_state = self.open_val   # Open gripper (-1.0)
         # else: retain previous state (hysteresis deadband prevents chattering)
 
         return self.current_state

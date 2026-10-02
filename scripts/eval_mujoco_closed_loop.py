@@ -14,12 +14,16 @@ Evaluation Workflow:
 """
 
 import argparse
+import builtins
 import json
 import os
 import pathlib
 import sys
 import time
 from typing import Dict, List, Optional
+
+# Automatically respond 'n' to any interactive prompts (such as LIBERO's initial setup prompt)
+builtins.input = lambda *args, **kwargs: "n"
 
 import numpy as np
 import torch
@@ -32,6 +36,24 @@ if str(root_dir) not in sys.path:
 # Configure headless rendering for Kaggle / Cloud environments
 os.environ.setdefault("MUJOCO_GL", "egl")
 os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+
+# Pre-populate ~/.libero/config.yaml if missing so LIBERO never triggers interactive prompts
+libero_dir = pathlib.Path.home() / ".libero"
+libero_dir.mkdir(parents=True, exist_ok=True)
+config_yaml = libero_dir / "config.yaml"
+if not config_yaml.exists():
+    try:
+        import libero
+        lib_root = pathlib.Path(libero.__file__).resolve().parent
+        config_yaml.write_text(
+            f"benchmark_root: '{str(lib_root)}'\n"
+            f"datasets: '{str(lib_root / 'datasets')}'\n"
+            f"bddl_files: '{str(lib_root / 'bddl_files')}'\n"
+            f"init_states: '{str(lib_root / 'init_states')}'\n"
+            f"assets: '{str(lib_root / 'assets')}'\n"
+        )
+    except Exception:
+        pass
 
 from configs.poc_config import ModelConfig, cfg
 

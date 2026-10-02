@@ -37,23 +37,40 @@ if str(root_dir) not in sys.path:
 os.environ.setdefault("MUJOCO_GL", "egl")
 os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
 
-# Pre-populate ~/.libero/config.yaml if missing so LIBERO never triggers interactive prompts
+# Pre-populate ~/.libero/config.yaml dynamically with correct path mappings
 libero_dir = pathlib.Path.home() / ".libero"
 libero_dir.mkdir(parents=True, exist_ok=True)
 config_yaml = libero_dir / "config.yaml"
-if not config_yaml.exists():
-    try:
-        import libero
-        lib_root = pathlib.Path(libero.__file__).resolve().parent
-        config_yaml.write_text(
-            f"benchmark_root: '{str(lib_root)}'\n"
-            f"datasets: '{str(lib_root / 'datasets')}'\n"
-            f"bddl_files: '{str(lib_root / 'bddl_files')}'\n"
-            f"init_states: '{str(lib_root / 'init_states')}'\n"
-            f"assets: '{str(lib_root / 'assets')}'\n"
-        )
-    except Exception:
-        pass
+try:
+    import libero
+    lib_root = pathlib.Path(libero.__file__).resolve().parent
+    init_dir = lib_root / "init_files"
+    for cand in [lib_root / "init_files", lib_root / "libero" / "init_files", lib_root / "init_states", lib_root / "libero" / "init_states"]:
+        if cand.is_dir():
+            init_dir = cand
+            break
+
+    bddl_dir = lib_root / "bddl_files"
+    for cand in [lib_root / "bddl_files", lib_root / "libero" / "bddl_files"]:
+        if cand.is_dir():
+            bddl_dir = cand
+            break
+
+    assets_dir = lib_root / "assets"
+    for cand in [lib_root / "assets", lib_root / "libero" / "assets"]:
+        if cand.is_dir():
+            assets_dir = cand
+            break
+
+    config_yaml.write_text(
+        f"benchmark_root: '{str(lib_root)}'\n"
+        f"datasets: '{str(lib_root / 'datasets')}'\n"
+        f"bddl_files: '{str(bddl_dir)}'\n"
+        f"init_states: '{str(init_dir)}'\n"
+        f"assets: '{str(assets_dir)}'\n"
+    )
+except Exception:
+    pass
 
 from configs.poc_config import ModelConfig, cfg
 
@@ -214,15 +231,29 @@ def run_closed_loop_evaluation(
         print(f"Task [{task_id}]: {task_desc}")
         print(f"=======================================================")
 
-        env = LiberoEnv(
-            task_suite=suite,
-            task_id=task_id,
-            task_suite_name="libero_spatial",
-            observation_width=cfg.img_size,
-            observation_height=cfg.img_size,
-            control_mode="relative",
-            episode_length=max_steps_per_episode,
-        )
+        try:
+            env = LiberoEnv(
+                task_suite=suite,
+                task_id=task_id,
+                task_suite_name="libero_spatial",
+                observation_width=cfg.img_size,
+                observation_height=cfg.img_size,
+                control_mode="relative",
+                episode_length=max_steps_per_episode,
+                init_states=True,
+            )
+        except Exception as e_init:
+            print(f"Notice: Loading fixed init_states failed ({e_init}). Initializing LiberoEnv with procedural BDDL reset (init_states=False)...")
+            env = LiberoEnv(
+                task_suite=suite,
+                task_id=task_id,
+                task_suite_name="libero_spatial",
+                observation_width=cfg.img_size,
+                observation_height=cfg.img_size,
+                control_mode="relative",
+                episode_length=max_steps_per_episode,
+                init_states=False,
+            )
 
         # Pre-tokenize task instruction
         if tok is not None:

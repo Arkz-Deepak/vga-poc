@@ -321,10 +321,10 @@ class VGAPolicy(nn.Module):
             # Generate 16-step action chunk via 4-step Euler ODE integration
             chunk_norm = self.expert.sample_actions(
                 context=context,
-                prefix_waypoints=self.prev_chunk_tail,
+                prefix_waypoints=None,
             )  # [1, 16, 7]
 
-            # Save the tail P=4 steps to condition the next chunk's prefix
+            # Save the tail P=4 steps to maintain state
             self.prev_chunk_tail = chunk_norm[:, -self.prefix_len:, :].clone()
 
             # Unnormalize actions to physical units if normalizer provided

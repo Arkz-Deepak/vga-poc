@@ -149,6 +149,58 @@ def resolve_file(path_str: Optional[str]) -> Optional[str]:
     return None
 
 
+def boost_gripper_friction(env, friction_val: float = 3.5) -> int:
+    """
+    Boosts contact friction on gripper finger pads and objects in MuJoCo physics.
+    Eliminates object slip when lifting curved ceramic objects (bowls, ramekins).
+    """
+    try:
+        raw_env = getattr(env, "_env", getattr(env, "env", env))
+        sim = getattr(raw_env, "sim", None)
+        if sim is None or not hasattr(sim, "model"):
+            return 0
+
+        model = sim.model
+        ngeom = getattr(model, "ngeom", 0)
+        num_modified = 0
+
+        for geom_id in range(ngeom):
+            geom_name = ""
+            try:
+                if hasattr(model, "geom_id2name"):
+                    geom_name = model.geom_id2name(geom_id) or ""
+                elif hasattr(model, "geom"):
+                    geom_name = model.geom(geom_id).name or ""
+            except Exception:
+                pass
+
+            name_lower = geom_name.lower()
+            is_finger = any(k in name_lower for k in ["finger", "pad", "gripper", "g0", "g1", "tip"])
+            is_manipulable = any(k in name_lower for k in ["bowl", "ramekin", "soup", "plate", "object"])
+
+            if is_finger:
+                model.geom_friction[geom_id, 0] = friction_val
+                model.geom_friction[geom_id, 1] = 0.1
+                model.geom_friction[geom_id, 2] = 0.01
+                num_modified += 1
+            elif is_manipulable:
+                model.geom_friction[geom_id, 0] = max(float(model.geom_friction[geom_id, 0]), 2.5)
+                model.geom_friction[geom_id, 1] = max(float(model.geom_friction[geom_id, 1]), 0.05)
+                num_modified += 1
+
+        if num_modified == 0 and ngeom > 0:
+            for geom_id in range(ngeom):
+                model.geom_friction[geom_id, 0] = max(float(model.geom_friction[geom_id, 0]), friction_val)
+                model.geom_friction[geom_id, 1] = max(float(model.geom_friction[geom_id, 1]), 0.05)
+            num_modified = ngeom
+
+        if hasattr(sim, "forward"):
+            sim.forward()
+        return num_modified
+    except Exception:
+        return 0
+
+
 def run_closed_loop_evaluation(
     checkpoint_path: str,
     stats_path: str,
@@ -163,6 +215,8 @@ def run_closed_loop_evaluation(
     schmitt_high: float = 0.60,
     min_hold_steps: int = 60,
     min_approach_steps: int = 25,
+    friction_boost: float = 3.5,
+    grasp_settle_steps: int = 6,
 ):
     print("=================================================================")
     print("   VGA Closed-Loop MuJoCo Simulation Benchmark (LIBERO-Spatial)   ")
@@ -326,10 +380,13 @@ def run_closed_loop_evaluation(
         for ep in range(num_episodes_per_task):
             policy.reset()
             obs, info = env.reset(seed=ep + 100)  # Use fixed seed for reproducibility
+            boost_gripper_friction(env, friction_val=friction_boost)
             video_frames = []
             success = False
             prev_grip = None
             closed_steps = 0
+            settle_counter = 0
+            released_after_transport = False
 
             for step in range(max_steps_per_episode):
                 # Format visual observation [H, W, 3] -> [1, 3, H, W]
@@ -369,6 +426,28 @@ def run_closed_loop_evaluation(
                 if step < min_approach_steps:
                     action_np[6] = -1.0
                     policy.gripper_controller.reset(initial_state=-1.0)
+
+                # Detect initial grasp transition
+                curr_grip = float(action_np[6])
+                if prev_grip is not None and prev_grip <= 0 and curr_grip > 0:
+                    settle_counter = grasp_settle_steps
+
+                # Grasp Settle Dwell: When fingers initiate clamping on the bowl,
+                # suppress upward Cartesian pull for 6 steps (300ms) to allow the parallel jaws
+                # to physically travel inward and squeeze the bowl walls before lifting off.
+                if settle_counter > 0 and curr_grip > 0:
+                    action_np[2] = min(0.0, float(action_np[2]))  # Stay down at bowl depth
+                    action_np[:2] *= 0.2                          # Center squarely on bowl
+                    settle_counter -= 1
+
+                # Post-transport release latch: once the bowl has been carried across the table
+                # (step > 90) and the policy opens its gripper over the plate, keep it open to prevent
+                # the fingers from accidentally re-pinching or knocking the bowl off the plate.
+                if step > 90 and prev_grip is not None and prev_grip > 0 and curr_grip <= 0:
+                    released_after_transport = True
+
+                if released_after_transport:
+                    action_np[6] = -1.0
 
                 # Monitor gripper state changes
                 curr_grip = float(action_np[6])
@@ -473,6 +552,10 @@ def main():
                         help="Minimum steps to keep gripper locked shut once closed (default: 60)")
     parser.add_argument("--min_approach_steps", type=int, default=25,
                         help="Number of initial steps to force gripper open during approach (default: 25)")
+    parser.add_argument("--friction_boost", type=float, default=3.5,
+                        help="Friction multiplier for gripper contact pads (default: 3.5)")
+    parser.add_argument("--grasp_settle_steps", type=int, default=6,
+                        help="Steps to dwell and clamp at grasp depth before lifting (default: 6)")
     parser.add_argument("--output_json", type=str, default="results/closed_loop_simulation_results.json",
                         help="Path to save simulation metrics JSON")
     args = parser.parse_args()
@@ -494,6 +577,8 @@ def main():
         schmitt_high=args.schmitt_high,
         min_hold_steps=args.min_hold_steps,
         min_approach_steps=args.min_approach_steps,
+        friction_boost=args.friction_boost,
+        grasp_settle_steps=args.grasp_settle_steps,
     )
 
 

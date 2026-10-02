@@ -199,17 +199,45 @@ def evaluate_checkpoint(
     print(f"Evaluating {num_eval_chunks} action chunks on {device}...")
     evaluated_count = 0
 
+    # Tokenizer helper
+    tok = policy.encoder.get_tokenizer()
+    if tok is not None and getattr(tok, "pad_token", None) is None:
+        tok.pad_token = tok.eos_token
+
     with torch.no_grad():
         for batch in test_loader:
             if evaluated_count >= num_eval_chunks:
                 break
 
             images = batch["image_front"].to(device)
-            input_ids = batch["input_ids"].to(device)
-            attention_mask = batch.get("attention_mask", None)
-            if attention_mask is not None:
-                attention_mask = attention_mask.to(device)
             gt_norm = batch["actions"].to(device)
+
+            # Extract or tokenize task instruction tokens
+            if "input_ids" in batch:
+                input_ids = batch["input_ids"].to(device)
+                attention_mask = batch.get("attention_mask", None)
+                if attention_mask is not None:
+                    attention_mask = attention_mask.to(device)
+            elif "task" in batch:
+                tasks = batch["task"]
+                if tok is not None:
+                    tokenized = tok(
+                        tasks,
+                        return_tensors="pt",
+                        padding="max_length",
+                        max_length=48,
+                        truncation=True,
+                    )
+                    input_ids = tokenized["input_ids"].to(device)
+                    attention_mask = tokenized["attention_mask"].to(device)
+                else:
+                    bs = images.shape[0]
+                    input_ids = torch.zeros((bs, 48), dtype=torch.long, device=device)
+                    attention_mask = torch.ones((bs, 48), dtype=torch.bool, device=device)
+            else:
+                bs = images.shape[0]
+                input_ids = torch.zeros((bs, 48), dtype=torch.long, device=device)
+                attention_mask = torch.ones((bs, 48), dtype=torch.bool, device=device)
 
             # Benchmark inference latency
             use_amp = device.startswith("cuda")

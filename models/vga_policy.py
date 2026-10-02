@@ -247,11 +247,18 @@ class VGAPolicy(nn.Module):
             chunk_phys = chunk_norm
 
         if apply_schmitt:
+            chunk_phys = chunk_phys.clone()
             B = chunk_phys.shape[0]
             for b in range(B):
+                state = 0.0
                 for t in range(self.action_horizon):
                     raw_g = chunk_phys[b, t, 6].item()
-                    chunk_phys[b, t, 6] = self.gripper_controller.step(raw_g)
+                    g_bar = (raw_g + 1.0) / 2.0
+                    if g_bar > self.gripper_controller.high_thresh:
+                        state = 1.0
+                    elif g_bar < self.gripper_controller.low_thresh:
+                        state = 0.0
+                    chunk_phys[b, t, 6] = state
 
         return chunk_phys
 

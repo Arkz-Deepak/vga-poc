@@ -101,6 +101,8 @@ class VisionLanguageEncoder(nn.Module):
         if self.tokenizer is None:
             try:
                 self.tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-135M")
+                if self.tokenizer.pad_token is None:
+                    self.tokenizer.pad_token = self.tokenizer.eos_token
             except Exception:
                 pass
         return self.tokenizer

@@ -135,6 +135,8 @@ def train_vga(
 
     # Tokenizer helper
     tok = policy.encoder.get_tokenizer()
+    if tok is not None and getattr(tok, "pad_token", None) is None:
+        tok.pad_token = tok.eos_token
 
     while step < num_steps:
         try:

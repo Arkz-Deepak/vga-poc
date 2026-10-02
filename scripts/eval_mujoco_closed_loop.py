@@ -159,6 +159,8 @@ def run_closed_loop_evaluation(
     record_videos: bool = True,
     video_dir: str = "results/videos",
     output_json: str = "results/closed_loop_simulation_results.json",
+    schmitt_low: float = 0.45,
+    schmitt_high: float = 0.55,
 ):
     print("=================================================================")
     print("   VGA Closed-Loop MuJoCo Simulation Benchmark (LIBERO-Spatial)   ")
@@ -201,8 +203,8 @@ def run_closed_loop_evaluation(
         euler_steps=cfg.euler_steps,
         beta_jerk=cfg.beta_jerk,
         w_rot=cfg.w_rot,
-        schmitt_low=cfg.schmitt_low,
-        schmitt_high=cfg.schmitt_high,
+        schmitt_low=schmitt_low,
+        schmitt_high=schmitt_high,
     ).to(device)
 
     # Load weights
@@ -323,6 +325,8 @@ def run_closed_loop_evaluation(
             obs, info = env.reset(seed=ep + 100)  # Use fixed seed for reproducibility
             video_frames = []
             success = False
+            prev_grip = None
+            closed_steps = 0
 
             for step in range(max_steps_per_episode):
                 # Format visual observation [H, W, 3] -> [1, 3, H, W]
@@ -356,6 +360,15 @@ def run_closed_loop_evaluation(
                 action_np = action_tensor.cpu().numpy()
                 action_np = np.clip(action_np, -1.0, 1.0)
 
+                # Monitor gripper state changes
+                curr_grip = float(action_np[6])
+                if curr_grip > 0:
+                    closed_steps += 1
+                if prev_grip is None or (curr_grip > 0 and prev_grip <= 0) or (curr_grip <= 0 and prev_grip > 0):
+                    grip_name = "CLOSED (+1.0)" if curr_grip > 0 else "OPEN (-1.0)"
+                    print(f"    [Step {step:3d}] Gripper state -> {grip_name}")
+                prev_grip = curr_grip
+
                 # Step MuJoCo physics engine
                 obs, reward, terminated, truncated, info = env.step(action_np)
 
@@ -370,7 +383,7 @@ def run_closed_loop_evaluation(
 
             if not success:
                 episode_lengths.append(max_steps_per_episode)
-                print(f"  - Episode {ep + 1}/{num_episodes_per_task}: ❌ Failed (timeout {max_steps_per_episode} steps)")
+                print(f"  - Episode {ep + 1}/{num_episodes_per_task}: ❌ Failed (timeout {max_steps_per_episode} steps, gripper closed: {closed_steps} steps)")
 
             if success:
                 task_successes += 1
@@ -442,6 +455,10 @@ def main():
                         help="Whether to save MP4 video replays")
     parser.add_argument("--video_dir", type=str, default="results/videos",
                         help="Directory to save MP4 videos")
+    parser.add_argument("--schmitt_high", type=float, default=0.55,
+                        help="Schmitt trigger gripper close threshold (default: 0.55)")
+    parser.add_argument("--schmitt_low", type=float, default=0.45,
+                        help="Schmitt trigger gripper open threshold (default: 0.45)")
     parser.add_argument("--output_json", type=str, default="results/closed_loop_simulation_results.json",
                         help="Path to save simulation metrics JSON")
     args = parser.parse_args()
@@ -459,6 +476,8 @@ def main():
         record_videos=args.record_videos,
         video_dir=args.video_dir,
         output_json=args.output_json,
+        schmitt_low=args.schmitt_low,
+        schmitt_high=args.schmitt_high,
     )
 
 

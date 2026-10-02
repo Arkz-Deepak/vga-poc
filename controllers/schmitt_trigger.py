@@ -30,8 +30,8 @@ class SchmittTriggerGripper:
     """
     def __init__(
         self,
-        low_thresh: float = 0.35,
-        high_thresh: float = 0.65,
+        low_thresh: float = 0.45,
+        high_thresh: float = 0.55,
         open_val: float = -1.0,
         close_val: float = 1.0,
         initial_state: float = None,

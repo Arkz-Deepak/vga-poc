@@ -64,8 +64,15 @@ try:
     for cand in init_candidates:
         if cand.is_dir():
             # Check if it contains .pruned_init files directly or in subfolders
-            if list(cand.rglob("*.pruned_init")):
-                init_dir = cand
+            pruned_files = list(cand.rglob("*.pruned_init"))
+            if pruned_files:
+                first_file = pruned_files[0]
+                # LeRobot calls root / task.problem_folder / filename.name
+                # So if first_file is .../libero_spatial/task.pruned_init, root is its parent's parent
+                if first_file.parent.name in ["libero_spatial", "libero_object", "libero_goal", "libero_10", "libero_90"]:
+                    init_dir = first_file.parent.parent
+                else:
+                    init_dir = first_file.parent
                 break
             elif not init_dir.is_dir():
                 init_dir = cand
@@ -227,23 +234,33 @@ def run_closed_loop_evaluation(
     total_suite_tasks = len(suite.tasks)
     print(f"LIBERO-Spatial Suite loaded: {total_suite_tasks} tasks available.")
 
-    # Find task indices matching our 3 targets
+    # Find task indices matching our exact target tasks
     matched_task_indices = []
-    for idx in range(total_suite_tasks):
-        t_name = suite.get_task(idx).name.lower()
-        for target in target_tasks:
-            target_clean = target.lower().replace(" ", "_")
-            if target_clean in t_name or any(w in t_name for w in ["black_bowl", "alphabet_soup", "plate_to_the_front"]):
+    for target in target_tasks:
+        target_clean = target.lower().replace(" ", "_")
+        matched = False
+        for idx in range(total_suite_tasks):
+            t_name = suite.get_task(idx).name.lower()
+            t_lang = suite.get_task(idx).language.lower()
+            if target_clean == t_name or target_clean in t_name or target.lower() == t_lang:
                 matched_task_indices.append((idx, suite.get_task(idx).language))
+                matched = True
                 break
+        if not matched:
+            print(f"Notice: Could not match exact task '{target}' in suite.")
 
     if not matched_task_indices:
         print("Warning: Could not match specific task names, using first 3 tasks in suite.")
         matched_task_indices = [(i, suite.get_task(i).language) for i in range(min(3, total_suite_tasks))]
 
+    print(f"Target tasks to evaluate ({len(matched_task_indices)}):")
+    for t_idx, t_name in matched_task_indices:
+        print(f"  - Suite Task [{t_idx}]: {t_name}")
+
     # 4. Run Closed-Loop Rollouts
     if record_videos:
         os.makedirs(video_dir, exist_ok=True)
+        print(f"Rollout videos will be saved to: {os.path.abspath(video_dir)}")
 
     task_results = {}
     total_successes = 0
@@ -269,6 +286,7 @@ def run_closed_loop_evaluation(
                 episode_length=max_steps_per_episode,
                 init_states=True,
             )
+            print(f"Initialized LiberoEnv with benchmark demonstration init_states=True.")
         except Exception as e_init:
             print(f"Notice: Loading fixed init_states failed ({e_init}). Initializing LiberoEnv with procedural BDDL reset (init_states=False)...")
             env = LiberoEnv(
@@ -312,6 +330,9 @@ def run_closed_loop_evaluation(
                 pixels = obs["pixels"]
                 img_front_np = pixels.get("image", next(iter(pixels.values())))
 
+                # Flip 180° to align with LeRobot / HuggingFace LIBERO convention (dims H and W)
+                img_front_np = np.ascontiguousarray(img_front_np[::-1, ::-1])
+
                 if record_videos and step % 2 == 0:
                     video_frames.append(img_front_np)
 
@@ -333,6 +354,7 @@ def run_closed_loop_evaluation(
                     action_tensor = policy.select_action(batch)
 
                 action_np = action_tensor.cpu().numpy()
+                action_np = np.clip(action_np, -1.0, 1.0)
 
                 # Step MuJoCo physics engine
                 obs, reward, terminated, truncated, info = env.step(action_np)

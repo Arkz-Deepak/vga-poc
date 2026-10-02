@@ -196,6 +196,8 @@ def boost_gripper_friction(env, friction_val: float = 3.5) -> int:
 
         if hasattr(sim, "forward"):
             sim.forward()
+        if num_modified > 0:
+            print(f"Applied high-friction gripper pads ({friction_val}x) across {num_modified} contact geoms.")
         return num_modified
     except Exception:
         return 0
@@ -378,8 +380,14 @@ def run_closed_loop_evaluation(
         episode_lengths = []
 
         for ep in range(num_episodes_per_task):
+            ep_seed = ep + 100
+            torch.manual_seed(ep_seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(ep_seed)
+            np.random.seed(ep_seed)
+
             policy.reset()
-            obs, info = env.reset(seed=ep + 100)  # Use fixed seed for reproducibility
+            obs, info = env.reset(seed=ep_seed)  # Use fixed seed for reproducibility
             boost_gripper_friction(env, friction_val=friction_boost)
             video_frames = []
             success = False
@@ -433,11 +441,12 @@ def run_closed_loop_evaluation(
                     settle_counter = grasp_settle_steps
 
                 # Grasp Settle Dwell: When fingers initiate clamping on the bowl,
-                # suppress upward Cartesian pull for 6 steps (300ms) to allow the parallel jaws
+                # suppress upward Cartesian pull for 4 steps (200ms) to allow the parallel jaws
                 # to physically travel inward and squeeze the bowl walls before lifting off.
+                # NOTE: Horizontal navigation (action_np[:2]) is intentionally untouched so the arm
+                # tracks its full natural target position without stalling mid-air.
                 if settle_counter > 0 and curr_grip > 0:
                     action_np[2] = min(0.0, float(action_np[2]))  # Stay down at bowl depth
-                    action_np[:2] *= 0.2                          # Center squarely on bowl
                     settle_counter -= 1
 
                 # Post-transport release latch: once the bowl has been carried across the table

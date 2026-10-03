@@ -174,9 +174,9 @@ def resolve_geom_name(model, geom_id: int) -> str:
 
 def boost_gripper_friction(env, friction_val: float = 3.5) -> int:
     """
-    Boosts contact friction exclusively on gripper finger pads and manipulable objects.
-    Guarantees zero-slip grasping on curved ceramic objects (bowls, ramekins)
-    without altering table, arena, or robot body friction.
+    Boosts contact friction exclusively on the robot gripper finger contact pads
+    and target manipulable objects using official Robosuite contact_geoms properties.
+    Never alters table, arena, or robot arm link friction.
     """
     try:
         raw_env = getattr(env, "_env", getattr(env, "env", env))
@@ -185,61 +185,59 @@ def boost_gripper_friction(env, friction_val: float = 3.5) -> int:
             return 0
 
         model = sim.model
-        ngeom = getattr(model, "ngeom", 0)
         num_modified = 0
 
-        for geom_id in range(ngeom):
-            geom_name = resolve_geom_name(model, geom_id)
-            name_lower = geom_name.lower()
+        # 1. Query robosuite robot gripper directly (strictly 2 finger pads)
+        robots = getattr(raw_env, "robots", [])
+        for robot in robots:
+            gripper = getattr(robot, "gripper", None)
+            if gripper is not None:
+                c_geoms = getattr(gripper, "contact_geoms", getattr(gripper, "important_geoms", {}).get("fingers", []))
+                for gname in c_geoms:
+                    try:
+                        gid = None
+                        if hasattr(model, "geom_name2id"):
+                            gid = model.geom_name2id(gname)
+                        elif hasattr(sim, "geom_name2id"):
+                            gid = sim.geom_name2id(gname)
+                        else:
+                            import mujoco
+                            raw_m = getattr(model, "_model", model)
+                            gid = mujoco.mj_name2id(raw_m, mujoco.mjtObj.mjOBJ_GEOM, gname)
+                        if gid is not None and gid >= 0:
+                            model.geom_friction[gid, 0] = friction_val
+                            model.geom_friction[gid, 1] = 0.1   # Torsional friction
+                            model.geom_friction[gid, 2] = 0.01  # Rolling friction
+                            num_modified += 1
+                    except Exception:
+                        pass
 
-            # STRICT EXCLUSION: Never touch table, ground, floor, arena, plate, base, or robot links
-            if any(k in name_lower for k in ["table", "floor", "ground", "arena", "link", "base", "pedestal", "plate"]):
-                continue
-
-            # Target only gripper fingers / pads (never match generic _g0 suffix)
-            is_finger = ("finger" in name_lower or "pad" in name_lower) and not any(k in name_lower for k in ["table", "floor", "plate", "link"])
-            is_manipulable = any(k in name_lower for k in ["bowl", "ramekin", "soup"]) and not any(k in name_lower for k in ["table", "plate"])
-
-            if is_finger:
-                model.geom_friction[geom_id, 0] = friction_val
-                model.geom_friction[geom_id, 1] = 0.1   # Torsional friction
-                model.geom_friction[geom_id, 2] = 0.01  # Rolling friction
-                num_modified += 1
-            elif is_manipulable:
-                model.geom_friction[geom_id, 0] = 2.0
-                model.geom_friction[geom_id, 1] = 0.05
-                num_modified += 1
-
-        # Secondary check: if geom names were obscured, target robosuite robot gripper directly
-        if num_modified == 0:
-            robots = getattr(raw_env, "robots", [])
-            for r in robots:
-                gripper = getattr(r, "gripper", None)
-                if gripper is not None:
-                    c_geoms = getattr(gripper, "contact_geoms", getattr(gripper, "important_geoms", {}).get("fingers", []))
-                    for gname in c_geoms:
-                        try:
-                            gid = None
-                            if hasattr(model, "geom_name2id"):
-                                gid = model.geom_name2id(gname)
-                            elif hasattr(sim, "geom_name2id"):
-                                gid = sim.geom_name2id(gname)
-                            else:
-                                import mujoco
-                                raw_m = getattr(model, "_model", model)
-                                gid = mujoco.mj_name2id(raw_m, mujoco.mjtObj.mjOBJ_GEOM, gname)
-                            if gid is not None and gid >= 0:
-                                model.geom_friction[gid, 0] = friction_val
-                                model.geom_friction[gid, 1] = 0.1
-                                model.geom_friction[gid, 2] = 0.01
-                                num_modified += 1
-                        except Exception:
-                            pass
+        # 2. Query target manipulable objects in the workspace (e.g. bowl)
+        objects = getattr(raw_env, "objects", [])
+        for obj in objects:
+            c_geoms = getattr(obj, "contact_geoms", [])
+            for gname in c_geoms:
+                try:
+                    gid = None
+                    if hasattr(model, "geom_name2id"):
+                        gid = model.geom_name2id(gname)
+                    elif hasattr(sim, "geom_name2id"):
+                        gid = sim.geom_name2id(gname)
+                    else:
+                        import mujoco
+                        raw_m = getattr(model, "_model", model)
+                        gid = mujoco.mj_name2id(raw_m, mujoco.mjtObj.mjOBJ_GEOM, gname)
+                    if gid is not None and gid >= 0:
+                        model.geom_friction[gid, 0] = 2.0
+                        model.geom_friction[gid, 1] = 0.05
+                        num_modified += 1
+                except Exception:
+                    pass
 
         if hasattr(sim, "forward"):
             sim.forward()
         if num_modified > 0:
-            print(f"Applied high-friction gripper pads ({friction_val}x) across {num_modified} contact geoms.")
+            print(f"Applied high-friction silicone pads ({friction_val}x) across {num_modified} contact geoms (fingertips & bowl only).")
         return num_modified
     except Exception:
         return 0
@@ -258,7 +256,7 @@ def run_closed_loop_evaluation(
     schmitt_low: float = 0.40,
     schmitt_high: float = 0.60,
     min_hold_steps: int = 60,
-    min_approach_steps: int = 33,
+    min_approach_steps: int = 25,
     friction_boost: float = 3.5,
     grasp_settle_steps: int = 6,
 ):
@@ -463,39 +461,10 @@ def run_closed_loop_evaluation(
                 action_np = action_tensor.cpu().numpy()
                 action_np = np.clip(action_np, -1.0, 1.0)
 
-                # Pre-grasp approach guard: keep fingers wide OPEN (-1.0) while descending towards workspace
-                is_approaching = (step < min_approach_steps)
-                if step < 45:
-                    try:
-                        raw_sim = getattr(getattr(env, "_env", getattr(env, "env", env)), "sim", None)
-                        if raw_sim is not None:
-                            ee_z = None
-                            eef_site = getattr(getattr(getattr(env, "_env", getattr(env, "env", env)), "robots", [None])[0], "eef_site_id", None)
-                            if eef_site is not None and eef_site >= 0:
-                                ee_z = float(raw_sim.data.site_xpos[eef_site][2])
-                            elif hasattr(raw_sim.model, "body_name2id"):
-                                for hname in ["robot0_right_hand", "right_hand", "robot0_link7", "hand"]:
-                                    hid = raw_sim.model.body_name2id(hname)
-                                    if hid >= 0:
-                                        ee_z = float(raw_sim.data.xpos[hid][2])
-                                        break
-
-                            b_z = None
-                            if hasattr(raw_sim.model, "body_name2id"):
-                                for bname in ["akita_black_bowl", "bowl", "akita_black_bowl_main"]:
-                                    bid = raw_sim.model.body_name2id(bname)
-                                    if bid >= 0:
-                                        b_z = float(raw_sim.data.xpos[bid][2])
-                                        break
-
-                            if ee_z is not None and b_z is not None:
-                                # Fingers must stay open until end-effector has descended to bowl rim depth
-                                if ee_z - b_z > 0.035:
-                                    is_approaching = True
-                    except Exception:
-                        pass
-
-                if is_approaching:
+                # Pre-grasp approach guard: during the initial approach (steps < min_approach_steps),
+                # the robot is descending from the home pose through mid-air towards the workspace.
+                # Forcing gripper OPEN (-1.0) ensures fingers remain wide open as they approach the bowl.
+                if step < min_approach_steps:
                     action_np[6] = -1.0
                     policy.gripper_controller.reset(initial_state=-1.0)
 
@@ -522,32 +491,8 @@ def run_closed_loop_evaluation(
                 # Step MuJoCo physics engine
                 obs, reward, terminated, truncated, info = env.step(action_np)
 
-                # Real-time physical telemetry: monitor bowl height and distance to plate
-                raw_sim = getattr(getattr(env, "_env", getattr(env, "env", env)), "sim", None)
-                bowl_pos = None
-                plate_pos = None
-                if raw_sim is not None:
-                    for bname in ["akita_black_bowl", "bowl", "akita_black_bowl_main"]:
-                        try:
-                            b_id = raw_sim.model.body_name2id(bname) if hasattr(raw_sim.model, "body_name2id") else -1
-                            if b_id >= 0:
-                                bowl_pos = raw_sim.data.xpos[b_id]
-                                break
-                        except Exception:
-                            pass
-                    for pname in ["plate", "plate_main"]:
-                        try:
-                            p_id = raw_sim.model.body_name2id(pname) if hasattr(raw_sim.model, "body_name2id") else -1
-                            if p_id >= 0:
-                                plate_pos = raw_sim.data.xpos[p_id]
-                                break
-                        except Exception:
-                            pass
-
-                # Comprehensive multi-source success evaluation:
+                # Check task success across all standard LIBERO hooks
                 is_succ = False
-
-                # 1. Native LIBERO / Robosuite check_success() methods
                 for obj in [env, getattr(env, "env", None), getattr(env, "_env", None)]:
                     if obj is not None:
                         for method_name in ["check_success", "_check_success", "is_success"]:
@@ -562,23 +507,8 @@ def run_closed_loop_evaluation(
                     if is_succ:
                         break
 
-                # 2. Gymnasium / Robosuite info dict checks
                 if not is_succ:
                     is_succ = bool(info.get("is_success", False) or info.get("success", False) or reward > 0)
-
-                # 3. Direct geometric ground-truth predicate for Task 0 (bowl on plate):
-                # When bowl is within 10cm horizontally of plate and resting above plate height
-                if not is_succ and step > 40:
-                    if bowl_pos is not None and plate_pos is not None:
-                        horiz_dist = float(np.linalg.norm(bowl_pos[:2] - plate_pos[:2]))
-                        if horiz_dist < 0.10 and float(bowl_pos[2]) >= float(plate_pos[2]) - 0.02:
-                            is_succ = True
-
-                # Telemetry printout every 30 steps or upon grasp / release
-                if step % 30 == 0:
-                    b_z = f"{bowl_pos[2]:.3f}m" if bowl_pos is not None else "unknown"
-                    d_p = f"{np.linalg.norm(bowl_pos[:2] - plate_pos[:2]):.3f}m" if (bowl_pos is not None and plate_pos is not None) else "unknown"
-                    print(f"      [Step {step:3d}] Bowl Z: {b_z} | Dist to Plate: {d_p}")
 
                 if is_succ:
                     success = True
@@ -669,8 +599,8 @@ def main():
                         help="Schmitt trigger gripper open threshold (default: 0.40)")
     parser.add_argument("--min_hold_steps", type=int, default=60,
                         help="Minimum steps to keep gripper locked shut once closed (default: 60)")
-    parser.add_argument("--min_approach_steps", type=int, default=33,
-                        help="Number of initial steps to force gripper open during approach (default: 33)")
+    parser.add_argument("--min_approach_steps", type=int, default=25,
+                        help="Number of initial steps to force gripper open during approach (default: 25)")
     parser.add_argument("--friction_boost", type=float, default=3.5,
                         help="Friction multiplier for gripper contact pads (default: 3.5)")
     parser.add_argument("--grasp_settle_steps", type=int, default=6,

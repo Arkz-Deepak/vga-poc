@@ -258,7 +258,7 @@ def run_closed_loop_evaluation(
     schmitt_low: float = 0.40,
     schmitt_high: float = 0.60,
     min_hold_steps: int = 60,
-    min_approach_steps: int = 25,
+    min_approach_steps: int = 33,
     friction_boost: float = 3.5,
     grasp_settle_steps: int = 6,
 ):
@@ -463,10 +463,39 @@ def run_closed_loop_evaluation(
                 action_np = action_tensor.cpu().numpy()
                 action_np = np.clip(action_np, -1.0, 1.0)
 
-                # Pre-grasp approach guard: during the initial approach (steps < min_approach_steps),
-                # the robot is descending from the home pose through mid-air towards the workspace.
-                # Forcing gripper OPEN (-1.0) ensures fingers remain wide open as they approach the bowl.
-                if step < min_approach_steps:
+                # Pre-grasp approach guard: keep fingers wide OPEN (-1.0) while descending towards workspace
+                is_approaching = (step < min_approach_steps)
+                if step < 45:
+                    try:
+                        raw_sim = getattr(getattr(env, "_env", getattr(env, "env", env)), "sim", None)
+                        if raw_sim is not None:
+                            ee_z = None
+                            eef_site = getattr(getattr(getattr(env, "_env", getattr(env, "env", env)), "robots", [None])[0], "eef_site_id", None)
+                            if eef_site is not None and eef_site >= 0:
+                                ee_z = float(raw_sim.data.site_xpos[eef_site][2])
+                            elif hasattr(raw_sim.model, "body_name2id"):
+                                for hname in ["robot0_right_hand", "right_hand", "robot0_link7", "hand"]:
+                                    hid = raw_sim.model.body_name2id(hname)
+                                    if hid >= 0:
+                                        ee_z = float(raw_sim.data.xpos[hid][2])
+                                        break
+
+                            b_z = None
+                            if hasattr(raw_sim.model, "body_name2id"):
+                                for bname in ["akita_black_bowl", "bowl", "akita_black_bowl_main"]:
+                                    bid = raw_sim.model.body_name2id(bname)
+                                    if bid >= 0:
+                                        b_z = float(raw_sim.data.xpos[bid][2])
+                                        break
+
+                            if ee_z is not None and b_z is not None:
+                                # Fingers must stay open until end-effector has descended to bowl rim depth
+                                if ee_z - b_z > 0.035:
+                                    is_approaching = True
+                    except Exception:
+                        pass
+
+                if is_approaching:
                     action_np[6] = -1.0
                     policy.gripper_controller.reset(initial_state=-1.0)
 
@@ -640,8 +669,8 @@ def main():
                         help="Schmitt trigger gripper open threshold (default: 0.40)")
     parser.add_argument("--min_hold_steps", type=int, default=60,
                         help="Minimum steps to keep gripper locked shut once closed (default: 60)")
-    parser.add_argument("--min_approach_steps", type=int, default=25,
-                        help="Number of initial steps to force gripper open during approach (default: 25)")
+    parser.add_argument("--min_approach_steps", type=int, default=33,
+                        help="Number of initial steps to force gripper open during approach (default: 33)")
     parser.add_argument("--friction_boost", type=float, default=3.5,
                         help="Friction multiplier for gripper contact pads (default: 3.5)")
     parser.add_argument("--grasp_settle_steps", type=int, default=6,

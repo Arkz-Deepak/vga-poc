@@ -192,6 +192,17 @@ Closed-loop physics simulation in MuJoCo was conducted on LIBERO-Spatial Task 0:
 
 ---
 
+### Turn 9: Premature Grasp at Step 29 & Depth-Aware Approach Calibration
+- **User Video Observation**:
+  > *"The robot did not clamp the bowl properly during the initial descent."*
+- **Root Cause Analysis**:
+  In Turn 8 rollouts, the gripper closed at **Step 29** because `min_approach_steps = 25` allowed the model to initiate clamping while still descending through mid-air above the bowl ($ee\_z - bowl\_z \approx 4\text{ cm}$). Pinching shut too high caused the fingers to close on empty air, and the 60-step hold locked the empty fingers shut during the remainder of the descent. In the successful Video 3 rollout, clamping did not initiate until **Step 32**, when the fingers were physically positioned around the bowl rim.
+- **Engineered Resolution**:
+  1. **Calibrated Approach Steps**: Updated default `min_approach_steps` from 25 to **33**, ensuring the arm completes its natural descent before clamping.
+  2. **Dynamic Depth-Aware Guard**: Added real-time spatial clearance monitoring in `scripts/eval_mujoco_closed_loop.py`. If the end-effector is more than 3.5 cm above the bowl ($ee\_z - bowl\_z > 0.035\text{ m}$), fingers are forced wide OPEN (`-1.0`) regardless of policy output until the bowl rim depth is reached.
+
+---
+
 ## Summary of Git Commits Across Turns
 
 | Commit | Description | Role in System |
@@ -209,7 +220,8 @@ Closed-loop physics simulation in MuJoCo was conducted on LIBERO-Spatial Task 0:
 | `3807ef3` | Pass `prefix_waypoints=None` in `select_action` to prevent chunk-1 velocity collapse | Trajectory continuity |
 | `0125573` | Restore natural trajectory, remove Cartesian clamping & seed bias, isolate finger friction | Master stability fix |
 | `912ba7a` | Add comprehensive development turns log and simulation post-mortem | Engineering documentation |
-| *(Latest)* | Fix 163-geom suffix match and add multi-source BDDL + 3D geometric success evaluation | **Final success hook & telemetry** |
+| `64aac4c` | Fix 163-geom suffix match, add multi-source BDDL check_success, add spatial telemetry | Success hook & telemetry |
+| *(Latest)* | Implement dynamic depth-aware approach guard and calibrate 33-step grasp depth | **Grasp depth calibration** |
 
 ---
 

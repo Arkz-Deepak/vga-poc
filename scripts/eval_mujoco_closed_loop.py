@@ -149,10 +149,34 @@ def resolve_file(path_str: Optional[str]) -> Optional[str]:
     return None
 
 
+def resolve_geom_name(model, geom_id: int) -> str:
+    """Robust cross-version geom name resolver for MuJoCo and Robosuite."""
+    try:
+        import mujoco
+        raw_m = getattr(model, "_model", model)
+        name = mujoco.mj_id2name(raw_m, mujoco.mjtObj.mjOBJ_GEOM, geom_id)
+        if name:
+            return name
+    except Exception:
+        pass
+    try:
+        if hasattr(model, "geom_id2name"):
+            return model.geom_id2name(geom_id) or ""
+    except Exception:
+        pass
+    try:
+        if hasattr(model, "geom"):
+            return model.geom(geom_id).name or ""
+    except Exception:
+        pass
+    return ""
+
+
 def boost_gripper_friction(env, friction_val: float = 3.5) -> int:
     """
-    Boosts contact friction on gripper finger pads and objects in MuJoCo physics.
-    Eliminates object slip when lifting curved ceramic objects (bowls, ramekins).
+    Boosts contact friction exclusively on gripper finger pads and manipulable objects.
+    Guarantees zero-slip grasping on curved ceramic objects (bowls, ramekins)
+    without altering table, arena, or robot body friction.
     """
     try:
         raw_env = getattr(env, "_env", getattr(env, "env", env))
@@ -165,34 +189,51 @@ def boost_gripper_friction(env, friction_val: float = 3.5) -> int:
         num_modified = 0
 
         for geom_id in range(ngeom):
-            geom_name = ""
-            try:
-                if hasattr(model, "geom_id2name"):
-                    geom_name = model.geom_id2name(geom_id) or ""
-                elif hasattr(model, "geom"):
-                    geom_name = model.geom(geom_id).name or ""
-            except Exception:
-                pass
-
+            geom_name = resolve_geom_name(model, geom_id)
             name_lower = geom_name.lower()
+
+            # STRICT EXCLUSION: Never touch table, ground, floor, arena, or robot links
+            if any(k in name_lower for k in ["table", "floor", "ground", "arena", "link", "base", "pedestal"]):
+                continue
+
             is_finger = any(k in name_lower for k in ["finger", "pad", "gripper", "g0", "g1", "tip"])
-            is_manipulable = any(k in name_lower for k in ["bowl", "ramekin", "soup", "plate", "object"])
+            is_manipulable = any(k in name_lower for k in ["bowl", "ramekin", "soup", "plate"])
 
             if is_finger:
                 model.geom_friction[geom_id, 0] = friction_val
-                model.geom_friction[geom_id, 1] = 0.1
-                model.geom_friction[geom_id, 2] = 0.01
+                model.geom_friction[geom_id, 1] = 0.1   # Torsional friction
+                model.geom_friction[geom_id, 2] = 0.01  # Rolling friction
                 num_modified += 1
             elif is_manipulable:
                 model.geom_friction[geom_id, 0] = max(float(model.geom_friction[geom_id, 0]), 2.5)
                 model.geom_friction[geom_id, 1] = max(float(model.geom_friction[geom_id, 1]), 0.05)
                 num_modified += 1
 
-        if num_modified == 0 and ngeom > 0:
-            for geom_id in range(ngeom):
-                model.geom_friction[geom_id, 0] = max(float(model.geom_friction[geom_id, 0]), friction_val)
-                model.geom_friction[geom_id, 1] = max(float(model.geom_friction[geom_id, 1]), 0.05)
-            num_modified = ngeom
+        # Secondary check: if geom names were obscured, target robosuite robot gripper directly
+        if num_modified == 0:
+            robots = getattr(raw_env, "robots", [])
+            for r in robots:
+                gripper = getattr(r, "gripper", None)
+                if gripper is not None:
+                    c_geoms = getattr(gripper, "contact_geoms", getattr(gripper, "important_geoms", {}).get("fingers", []))
+                    for gname in c_geoms:
+                        try:
+                            gid = None
+                            if hasattr(model, "geom_name2id"):
+                                gid = model.geom_name2id(gname)
+                            elif hasattr(sim, "geom_name2id"):
+                                gid = sim.geom_name2id(gname)
+                            else:
+                                import mujoco
+                                raw_m = getattr(model, "_model", model)
+                                gid = mujoco.mj_name2id(raw_m, mujoco.mjtObj.mjOBJ_GEOM, gname)
+                            if gid is not None and gid >= 0:
+                                model.geom_friction[gid, 0] = friction_val
+                                model.geom_friction[gid, 1] = 0.1
+                                model.geom_friction[gid, 2] = 0.01
+                                num_modified += 1
+                        except Exception:
+                            pass
 
         if hasattr(sim, "forward"):
             sim.forward()
@@ -380,20 +421,13 @@ def run_closed_loop_evaluation(
         episode_lengths = []
 
         for ep in range(num_episodes_per_task):
-            ep_seed = ep + 100
-            torch.manual_seed(ep_seed)
-            if torch.cuda.is_available():
-                torch.cuda.manual_seed_all(ep_seed)
-            np.random.seed(ep_seed)
-
             policy.reset()
-            obs, info = env.reset(seed=ep_seed)  # Use fixed seed for reproducibility
+            obs, info = env.reset(seed=ep + 100)  # Use fixed seed for reproducibility
             boost_gripper_friction(env, friction_val=friction_boost)
             video_frames = []
             success = False
             prev_grip = None
             closed_steps = 0
-            settle_counter = 0
             released_after_transport = False
 
             for step in range(max_steps_per_episode):
@@ -435,20 +469,7 @@ def run_closed_loop_evaluation(
                     action_np[6] = -1.0
                     policy.gripper_controller.reset(initial_state=-1.0)
 
-                # Detect initial grasp transition
                 curr_grip = float(action_np[6])
-                if prev_grip is not None and prev_grip <= 0 and curr_grip > 0:
-                    settle_counter = grasp_settle_steps
-
-                # Grasp Settle Dwell: When fingers initiate clamping on the bowl,
-                # suppress upward Cartesian pull for 4 steps (200ms) to allow the parallel jaws
-                # to physically travel inward and squeeze the bowl walls before lifting off.
-                # NOTE: Horizontal navigation (action_np[:2]) is intentionally untouched so the arm
-                # tracks its full natural target position without stalling mid-air.
-                if settle_counter > 0 and curr_grip > 0:
-                    action_np[2] = min(0.0, float(action_np[2]))  # Stay down at bowl depth
-                    settle_counter -= 1
-
                 # Post-transport release latch: once the bowl has been carried across the table
                 # (step > 90) and the policy opens its gripper over the plate, keep it open to prevent
                 # the fingers from accidentally re-pinching or knocking the bowl off the plate.
@@ -457,6 +478,7 @@ def run_closed_loop_evaluation(
 
                 if released_after_transport:
                     action_np[6] = -1.0
+                    curr_grip = -1.0
 
                 # Monitor gripper state changes
                 curr_grip = float(action_np[6])

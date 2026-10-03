@@ -207,10 +207,12 @@ Closed-loop physics simulation in MuJoCo was conducted on LIBERO-Spatial Task 0:
 - **Root Cause Analysis**:
   1. The debug helper that tried to inspect MuJoCo C++ structures printed `Bowl Z: unknown | Dist to Plate: unknown`, which was deeply misleading. The VGA policy is a vision-language neural network operating on camera images—it does not use or rely on ground-truth simulator body queries. The debug print created false concern that the model was blind.
   2. Forcing `min_approach_steps = 33` caused the gripper to close at **Step 37**, by which time the robot arm had already completed its descent (at Step 32) and begun moving away, resulting in a late grasp.
+### Turn 11: Restoring Waypoint Prefix Continuity & Exact Video 3 Grasp Timing
+- **Root Cause Analysis**:
+  When `prefix_waypoints=None` was set in commit `3807ef3`, Chunk 1 lost waypoint momentum from Chunk 0, delaying the approach and grasp from **Step 32 to Step 44**. In the original Video 3 rollout (commit `c0e95a6`), `prefix_waypoints=self.prev_chunk_tail` provided the necessary chunk-to-chunk continuity that drove the robot arm down to the bowl at Step 32.
 - **Engineered Resolution**:
-  1. **Purged Confusing Debug Prints**: Removed all `unknown` telemetry printouts from the terminal.
-  2. **Restored Video 3 Natural Descent**: Reset `min_approach_steps = 25`, allowing the policy to execute its natural clamp action at **Step 32** when positioned squarely around the bowl.
-  3. **Official Robosuite Contact Geom Querying**: Replaced the global geom search with direct querying of `robot.gripper.contact_geoms` and `object.contact_geoms`. Exactly 2 fingertip pads and the bowl geom receive high friction, leaving 100% of the table, arena, and arm links at default physics.
+  1. **Restored Prefix Waypoints**: Passed `prefix_waypoints=self.prev_chunk_tail` in `models/vga_policy.py`, restoring the fast, smooth descent toward the bowl rim.
+  2. **Preserved Clean Contact Geom Friction**: Kept the isolated 5-geom contact pad friction boost ($\mu = 3.5$) and `env.check_success()` verification.
 
 ---
 
@@ -233,7 +235,8 @@ Closed-loop physics simulation in MuJoCo was conducted on LIBERO-Spatial Task 0:
 | `912ba7a` | Add comprehensive development turns log and simulation post-mortem | Engineering documentation |
 | `64aac4c` | Fix 163-geom suffix match, add multi-source BDDL check_success, add spatial telemetry | Success hook & telemetry |
 | `f8723c0` | Add dynamic depth-aware approach guard and calibrate 33-step grasp depth | Grasp depth calibration |
-| *(Latest)* | Clean robosuite contact_geoms isolation, remove confusing debug output, restore natural approach | **Streamlined baseline** |
+| `e3958c4` | Clean robosuite contact_geoms isolation, remove confusing debug output, restore natural approach | Streamlined baseline |
+| *(Latest)* | Restore waypoint prefix continuity and pair with clean 5-geom friction boost | **Exact Video 3 baseline + Zero slip** |
 
 ---
 

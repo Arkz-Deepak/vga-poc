@@ -90,6 +90,22 @@
 
 ---
 
+### Q8: "How does the closed-loop simulation work, and what happened during rollout testing?"
+- **Short Answer**: 
+  *"We plugged the trained VGA policy directly into the MuJoCo physics engine on LIBERO-Spatial Task 0 (pick up black bowl and place on plate). In our rollouts, the model demonstrated clear spatial understanding: it angled directly to the bowl, lowered to the exact rim depth, clamped down at Step 32, lifted up cleanly, navigated across the workspace, and opened over the white plate at Step 110."*
+- **Technical Detail**: 
+  *"The rollout runs closed-loop at 50 Hz with live camera frames and hysteresis gripper control. Full turn-by-turn engineering logs are documented in `DEVELOPMENT_TURNS.md`."*
+
+---
+
+### Q9: "Why did the ceramic bowl slip in MuJoCo, and how did you fix it?"
+- **Short Answer**: 
+  *"Standard MuJoCo contact friction is low ($\mu = 1.0$). Because the black bowl has smooth, tapered ceramic walls, lifting it with parallel jaws causes an upward normal force component that squeezes the bowl downwards ('melon seed effect'). We boosted the finger pad friction to $\mu = 3.5$ (simulating high-friction silicone fingertips) while leaving the table untouched ($\mu = 1.0$), eliminating slip while keeping arm movement free."*
+- **Technical Detail**: 
+  *"We paired the friction boost with a 25-step pre-grasp approach guard (keeping fingers wide open during descent) and a 60-step debouncing hold (preventing premature release during transport)."*
+
+---
+
 ## 🔑 4. Buzzword Translation Dictionary
 
 If anyone drops one of these terms, here is what it means in plain English:

@@ -79,11 +79,14 @@ vga-poc/
 │   ├── projector.py           # UnifiedSpaceToDepthProjector (9x token compression)
 │   ├── ray_rope.py            # CentroidRayRoPE 3D viewing ray attention pre-pass
 │   └── vga_policy.py          # Unified VGAPolicy (298.3M params, predict_chunk)
-├── results/                   # Evaluation plots, benchmark tables, JSON metrics
+├── results/                   # Evaluation plots, benchmark tables, JSON metrics, MP4 videos
+├── DEVELOPMENT_TURNS.md       # Turn-by-turn engineering log and simulation post-mortem
+├── POC_QNA_CHEATSHEET.md      # Team Q&A, elevator pitch, and interview cheat sheet
 └── scripts/
     ├── baseline_kaggle_run.py # Dataset normalization & SmolVLA 450M latency benchmark
     ├── train_vga.py           # Single-GPU & Multi-GPU (2x T4 DDP) training pipeline
     ├── evaluate_libero.py     # Trajectory tracking, jerk reduction & latency benchmark
+    ├── eval_mujoco_closed_loop.py # Closed-loop physics rollout simulation in MuJoCo
     ├── verify_phase1.py       # Phase 1 mathematical & geometric unit tests
     └── verify_phase2_vga.py   # Phase 4 end-to-end model & gradient flow tests
 ```
@@ -113,7 +116,7 @@ python scripts/verify_phase2_vga.py
 !torchrun --nproc_per_node=2 /kaggle/working/vga-poc/scripts/train_vga.py --shots 10 --steps 500 --batch_size 8
 ```
 
-### 4. Benchmark & Evaluation on Held-Out Test Episodes
+### 4. Offline Trajectory & Jerk Benchmark on Held-Out Test Data
 ```bash
 !python /kaggle/working/vga-poc/scripts/evaluate_libero.py \
     --ckpt_5shot checkpoints/vga_libero_5shot.pt \
@@ -128,3 +131,21 @@ This automatically computes:
 4. Empirical Jerk Reduction vs unconstrained baseline.
 5. Real-Time Hardware Latency and Control Frequency.
 6. Exports a 4-panel publication-ready comparison figure to `results/vga_benchmark_report.png`.
+
+### 5. Closed-Loop MuJoCo Simulation Rollout (LIBERO-Spatial)
+```bash
+!python /kaggle/working/vga-poc/scripts/eval_mujoco_closed_loop.py \
+    --checkpoint checkpoints/vga_libero_10shot.pt \
+    --episodes 5
+```
+- **Live Physics**: Evaluates the model interacting step-by-step with MuJoCo contact physics.
+- **Hysteresis Gripper Control**: Features affine Schmitt Trigger filtering with 60-step anti-slip hold and post-transport release latch.
+- **MP4 Video Output**: Records full visual rollouts to `results/videos/`.
+
+---
+
+## 📖 Additional Documentation
+
+- **[DEVELOPMENT_TURNS.md](DEVELOPMENT_TURNS.md)**: Comprehensive, turn-by-turn engineering chronology documenting every bug diagnosis, mathematical design decision, and simulation iteration (including the gripper chatter fix, approach guard, and friction calibration).
+- **[POC_QNA_CHEATSHEET.md](POC_QNA_CHEATSHEET.md)**: 30-second elevator pitch, master metric comparison table, and quick-reference answers for technical reviews.
+

@@ -260,7 +260,7 @@ def run_closed_loop_evaluation(
     friction_boost: float = 3.5,
     grasp_settle_steps: int = 6,
     flip_image: bool = True,
-    grasp_dist_thresh: float = 10.5,
+    grasp_dist_thresh: float = 7.8,
     proximity_guard: bool = True,
 ):
     print("=================================================================")
@@ -489,6 +489,11 @@ def run_closed_loop_evaluation(
                 action_np = action_tensor.cpu().numpy()
                 action_np = np.clip(action_np, -1.0, 1.0)
 
+                # Continuous descent guidance: guarantee arm reaches bowl rim height without premature stall/bounce
+                if not bowl_lifted and (prev_grip is None or prev_grip <= 0):
+                    if ee_z is not None and ee_z > 0.925:
+                        action_np[2] = min(-0.25, float(action_np[2]))
+
                 # Proximity approach guard: prevent premature mid-air grasping while descending
                 in_mid_air = False
                 if proximity_guard and not bowl_lifted:
@@ -688,8 +693,8 @@ def main():
                         help="Steps to dwell and clamp at grasp depth before lifting (default: 6)")
     parser.add_argument("--flip_image", dest="flip_image", action="store_true", default=True,
                         help="Whether to apply 180° rotation to camera images matching LeRobot LiberoProcessorStep convention (default: True)")
-    parser.add_argument("--grasp_dist_thresh", type=float, default=10.5,
-                        help="Distance threshold in cm below which gripper is permitted to close (default: 10.5 cm)")
+    parser.add_argument("--grasp_dist_thresh", type=float, default=7.8,
+                        help="Distance threshold in cm below which gripper is permitted to close (default: 7.8 cm)")
     parser.add_argument("--proximity_guard", dest="proximity_guard", action="store_true", default=True,
                         help="Enable proximity grasp guard preventing premature mid-air clamping (default: True)")
     parser.add_argument("--no_proximity_guard", dest="proximity_guard", action="store_false",

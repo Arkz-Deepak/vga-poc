@@ -247,9 +247,9 @@ Closed-loop physics simulation in MuJoCo was conducted on LIBERO-Spatial Task 0:
 | `64aac4c` | Fix 163-geom suffix match, add multi-source BDDL check_success, add spatial telemetry | Success hook & telemetry |
 | `f8723c0` | Add dynamic depth-aware approach guard and calibrate 33-step grasp depth | Grasp depth calibration |
 | `e3958c4` | Clean robosuite contact_geoms isolation, remove confusing debug output, restore natural approach | Streamlined baseline |
-| `a9cf9b0` | Restore waypoint prefix continuity for natural step 32 grasp timing | Trajectory timing fix |
 | `1e5de67` | Remove 180° image inversion, add `--flip_image` flag, and implement full policy feedback telemetry | Dataset image parity + Rich telemetry |
-| *(Latest)* | Integrate official pretrained SigLIP & SmolLM2 backbones, freeze internet priors, align 576-dim DiT expert | **Pretrained Perception & Fast PEFT** |
+| `c756116` | Import Optional and typing utilities in train_vga.py | Typing & import fix |
+| *(Latest)* | Rewrite clean one-click Kaggle notebook, restore official 180° camera flip, remove heuristic release overrides | **Clean Kaggle Pipeline & Official Parity** |
 
 ---
 
@@ -268,31 +268,47 @@ Closed-loop physics simulation in MuJoCo was conducted on LIBERO-Spatial Task 0:
   3. **Memory & Optimizer Efficiency**:
      - `train_vga.py` passes only trainable parameters to AdamW, cutting optimizer state memory by 85% and training 500 steps in ~3 minutes on Kaggle T4.
   4. **Robust Checkpoint Synchronization**:
-     - Evaluation scripts (`eval_mujoco_closed_loop.py`, `evaluate_libero.py`) load checkpoint configuration first before policy instantiation, ensuring 100% parameter alignment.
+      - Evaluation scripts (`eval_mujoco_closed_loop.py`, `evaluate_libero.py`) load checkpoint configuration first before policy instantiation, ensuring 100% parameter alignment.
+
+---
+
+### Turn 14: Single-Click Kaggle Notebook Rewrite & Official LeRobot Parity
+- **User Pain Points Addressed**:
+  1. *Dirty Working Directory on Kaggle*: Previous `git clone` broke when the directory already existed (`fatal: destination path 'vga-poc' already exists`). Replaced with auto-detecting check (`git fetch origin && git reset --hard origin/main`).
+  2. *Camera Orientation Confirmation*: Verified against LeRobot's official `LiberoProcessorStep` source code that raw MuJoCo OpenGL camera frames require a 180° flip (`torch.flip(img, dims=[2, 3])` / `[::-1, ::-1]`) to match `HuggingFaceVLA/libero` and `lerobot/libero_spatial_image`. Evaluation default set to `flip_image = True`.
+  3. *Unconstrained Gripper Control*: Stripped out artificial hardcoded overrides (`min_approach_steps = 0`, removed `step > 90` release latch) so the gripper is purely governed by the trained policy and calibrated Schmitt trigger hysteresis.
+  4. *One-Click Kaggle Notebook*: Created [`notebooks/libero_vga_kaggle.ipynb`](file:///home/deepak-r/Project/poc/notebooks/libero_vga_kaggle.ipynb) featuring 15 clean cells covering package installation, git sync, hardware check, 10-shot training, simulation evaluation, and direct in-notebook HTML5 video playback.
 
 ---
 
 ## How to Train and Evaluate on Kaggle Cloud GPU
 
-To train and evaluate the pretrained VGA model on Kaggle across 5 closed-loop simulation episodes:
+To train and evaluate the pretrained VGA model on Kaggle:
 
+1. **Option A (Recommended)**: Import [`notebooks/libero_vga_kaggle.ipynb`](file:///home/deepak-r/Project/poc/notebooks/libero_vga_kaggle.ipynb) into Kaggle and click **Run All**.
+2. **Option B (Command Line)**:
 ```bash
 # 1. Pull the latest commits from main
-!cd /kaggle/working/vga-poc && git pull origin main
+!cd /kaggle/working/vga-poc && git fetch origin && git reset --hard origin/main
 
-# 2. Train VGA Policy with official pretrained backbones (500 steps, ~3-4 mins on T4 GPU)
+# 2. Train VGA Policy with official pretrained backbones (500 steps, ~3.5 mins on T4 GPU)
 !python /kaggle/working/vga-poc/scripts/train_vga.py --shots 10 --steps 500 --batch_size 8
 
 # 3. Run closed-loop evaluation on LIBERO-Spatial Task 0
 !python /kaggle/working/vga-poc/scripts/eval_mujoco_closed_loop.py \
     --checkpoint /kaggle/working/vga-poc/checkpoints/vga_libero_10shot.pt \
-    --episodes 5
+    --num_episodes 3 \
+    --max_steps 280
 ```
 
 ### Video Verification
-Rollout videos are saved directly to `/kaggle/working/results/videos/`. To view the winning rollout in Kaggle:
+Rollout videos are saved directly to `/kaggle/working/vga-poc/results/videos/`. To view the replay in Kaggle:
 
 ```python
-from IPython.display import Video
-Video("/kaggle/working/results/videos/task_0_ep_0_success.mp4", embed=True, width=512)
+from IPython.display import HTML
+from base64 import b64encode
+
+video_path = "/kaggle/working/vga-poc/results/videos/task_0_ep_0_success.mp4"
+mp4 = open(video_path, 'rb').read()
+display(HTML(f'<video width=640 controls autoplay loop><source src="data:video/mp4;base64,{b64encode(mp4).decode()}" type="video/mp4"></video>'))
 ```

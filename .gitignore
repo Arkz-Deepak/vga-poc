@@ -49,6 +49,9 @@ wandb/
 runs/
 *.log
 results/*.csv
+results/*.png
+results/*.mp4
+results/*.json
 !results/README.md
 
 # Jupyter

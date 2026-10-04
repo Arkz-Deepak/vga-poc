@@ -256,10 +256,10 @@ def run_closed_loop_evaluation(
     schmitt_low: float = 0.40,
     schmitt_high: float = 0.60,
     min_hold_steps: int = 60,
-    min_approach_steps: int = 25,
+    min_approach_steps: int = 0,
     friction_boost: float = 3.5,
     grasp_settle_steps: int = 6,
-    flip_image: bool = False,
+    flip_image: bool = True,
 ):
     print("=================================================================")
     print("   VGA Closed-Loop MuJoCo Simulation Benchmark (LIBERO-Spatial)   ")
@@ -485,45 +485,30 @@ def run_closed_loop_evaluation(
                 action_np = action_tensor.cpu().numpy()
                 action_np = np.clip(action_np, -1.0, 1.0)
 
-                # Pre-grasp approach guard: during the initial approach (steps < min_approach_steps),
-                # the robot is descending from the home pose through mid-air towards the workspace.
-                # Forcing gripper OPEN (-1.0) ensures fingers remain wide open as they approach the bowl.
-                if step < min_approach_steps:
+                # Optional initial approach guard (disabled by default when min_approach_steps=0)
+                if min_approach_steps > 0 and step < min_approach_steps:
                     action_np[6] = -1.0
                     policy.gripper_controller.reset(initial_state=-1.0)
 
                 curr_grip = float(action_np[6])
-                # Post-transport release latch: once the bowl has been carried across the table
-                # (step > 90) and the policy opens its gripper over the plate, keep it open to prevent
-                # the fingers from accidentally re-pinching or knocking the bowl off the plate.
-                if step > 90 and prev_grip is not None and prev_grip > 0 and curr_grip <= 0:
-                    released_after_transport = True
-
-                if released_after_transport:
-                    action_np[6] = -1.0
-                    curr_grip = -1.0
-
-                # Monitor gripper state changes with rich explanatory feedback
-                curr_grip = float(action_np[6])
                 if curr_grip > 0:
                     closed_steps += 1
+
+                # Monitor gripper state changes with rich explanatory feedback
                 if prev_grip is None or (curr_grip > 0 and prev_grip <= 0) or (curr_grip <= 0 and prev_grip > 0):
                     grip_name = "CLOSED (+1.0)" if curr_grip > 0 else "OPEN (-1.0)"
                     telem = f"    [Step {step:3d}] Gripper -> {grip_name}"
                     if curr_grip > 0:
                         if dist_ee_bowl is not None:
-                            verdict = "🎯 Square grasp centered on bowl rim!" if dist_ee_bowl < 3.5 else f"⚠️ High/wide grasp: {dist_ee_bowl:.1f} cm from bowl center"
+                            verdict = "🎯 Square grasp centered on bowl rim!" if dist_ee_bowl < 3.5 else f"⚠️ Grasp attempt: {dist_ee_bowl:.1f} cm from bowl center"
                             telem += f" | Dist to Bowl: {dist_ee_bowl:.1f} cm ({verdict})"
                         else:
                             telem += " | Clamped by policy trigger"
                     else:
-                        if step < min_approach_steps:
-                            telem += " | Pre-grasp guard: holding fingers wide open during descent"
-                        elif released_after_transport:
-                            plate_info = f" (Dist to Plate: {dist_bowl_plate:.1f} cm)" if dist_bowl_plate is not None else ""
-                            telem += f" | Release latch: dropping bowl over plate{plate_info}"
+                        if min_approach_steps > 0 and step < min_approach_steps:
+                            telem += " | Pre-grasp guard: fingers open during descent"
                         else:
-                            telem += " | Policy requested release"
+                            telem += " | Policy commanded gripper OPEN"
                     print(telem)
                 prev_grip = curr_grip
 
@@ -663,14 +648,16 @@ def main():
                         help="Schmitt trigger gripper open threshold (default: 0.40)")
     parser.add_argument("--min_hold_steps", type=int, default=60,
                         help="Minimum steps to keep gripper locked shut once closed (default: 60)")
-    parser.add_argument("--min_approach_steps", type=int, default=25,
-                        help="Number of initial steps to force gripper open during approach (default: 25)")
+    parser.add_argument("--min_approach_steps", type=int, default=0,
+                        help="Number of initial steps to force gripper open during approach (default: 0, disabled)")
     parser.add_argument("--friction_boost", type=float, default=3.5,
                         help="Friction multiplier for gripper contact pads (default: 3.5)")
     parser.add_argument("--grasp_settle_steps", type=int, default=6,
                         help="Steps to dwell and clamp at grasp depth before lifting (default: 6)")
-    parser.add_argument("--flip_image", action="store_true", default=False,
-                        help="Whether to apply 180° rotation to camera images (default: False, upright matching dataset)")
+    parser.add_argument("--flip_image", dest="flip_image", action="store_true", default=True,
+                        help="Whether to apply 180° rotation to camera images matching LeRobot LiberoProcessorStep convention (default: True)")
+    parser.add_argument("--no_flip_image", dest="flip_image", action="store_false",
+                        help="Disable 180° rotation (use raw unrotated MuJoCo OpenGL image)")
     parser.add_argument("--output_json", type=str, default="results/closed_loop_simulation_results.json",
                         help="Path to save simulation metrics JSON")
     args = parser.parse_args()

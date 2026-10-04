@@ -78,7 +78,10 @@ def train_vga(
                 print(f"  - GPU {g}: {name} ({mem:.2f} GB VRAM)")
 
     cfg = ModelConfig()
-    pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
+    out_dir_path = pathlib.Path(output_dir)
+    if not out_dir_path.is_absolute():
+        out_dir_path = root_dir / output_dir
+    out_dir_path.mkdir(parents=True, exist_ok=True)
 
     # 1. Ingest Dataset & Empirical Normalizer
     if is_main_process:
@@ -229,7 +232,7 @@ def train_vga(
 
     # 5. Save Checkpoint (Only on main process)
     if is_main_process:
-        save_path = os.path.join(output_dir, f"vga_libero_{shots}shot.pt")
+        save_path = str(out_dir_path / f"vga_libero_{shots}shot.pt")
         torch.save(
             {
                 "step": step,

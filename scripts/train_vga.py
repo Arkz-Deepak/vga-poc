@@ -48,6 +48,7 @@ def train_vga(
     num_steps: int = 300,
     lr: float = 1e-4,
     output_dir: str = "checkpoints",
+    stats_path: Optional[str] = None,
 ):
     # 0. Distributed / Multi-GPU Process Initialization
     is_distributed = int(os.environ.get("WORLD_SIZE", 1)) > 1
@@ -91,7 +92,8 @@ def train_vga(
         repo_id = "lerobot/libero_spatial"
         raw_dataset = LeRobotDataset(repo_id)
 
-    normalizer = Normalizer("configs/action_stats.json")
+    stats_file = stats_path or str(root_dir / "configs" / "action_stats.json")
+    normalizer = Normalizer(stats_file)
     train_dataset = LiberoSpatialDataset(
         lerobot_dataset=raw_dataset,
         normalizer=normalizer,
@@ -302,6 +304,8 @@ if __name__ == "__main__":
     parser.add_argument("--steps", type=int, default=300, help="Number of training steps")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size per GPU")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
+    parser.add_argument("--output_dir", type=str, default="checkpoints", help="Output directory for checkpoints")
+    parser.add_argument("--stats_path", type=str, default=None, help="Path to action_stats.json")
     args = parser.parse_args()
 
     train_vga(
@@ -309,4 +313,6 @@ if __name__ == "__main__":
         num_steps=args.steps,
         batch_size=args.batch_size,
         lr=args.lr,
+        output_dir=args.output_dir,
+        stats_path=args.stats_path,
     )

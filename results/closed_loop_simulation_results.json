@@ -1,0 +1,13 @@
+{
+  "overall_success_rate_pct": 33.33333333333333,
+  "total_successes": 1,
+  "total_rollouts": 3,
+  "tasks": {
+    "pick up the black bowl between the plate and the ramekin and place it on the plate": {
+      "success_rate_pct": 33.33333333333333,
+      "successes": 1,
+      "total_episodes": 3,
+      "avg_steps_to_finish": 226.0
+    }
+  }
+}

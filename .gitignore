@@ -48,11 +48,10 @@ data/cache/
 wandb/
 runs/
 *.log
-results/*.csv
-results/*.png
-results/*.mp4
-results/*.json
-!results/README.md
+!results/closed_loop_simulation_results.json
+!results/videos/
+!results/videos/*.mp4
+!results/*.png
 
 # Jupyter
 .ipynb_checkpoints/

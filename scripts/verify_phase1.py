@@ -26,9 +26,10 @@ def test_projector():
     print("\n--- [1/4] Testing UnifiedSpaceToDepthProjector ---")
     batch_size = 2
     vis_dim = cfg.vis_dim      # 768
-    lm_dim = cfg.lm_dim        # 960
-    spatial_factor = cfg.spatial_factor  # 3
-    num_patches = 576          # 24x24 grid from SigLIP
+    lm_dim = cfg.lm_dim        # 576
+    spatial_factor = cfg.spatial_factor  # 2
+    grid_dim = cfg.img_size // cfg.patch_size  # 256 / 16 = 16
+    num_patches = grid_dim * grid_dim          # 16x16 = 256 patches from SigLIP-256
 
     projector = UnifiedSpaceToDepthProjector(
         vis_dim=vis_dim,
@@ -36,7 +37,7 @@ def test_projector():
         spatial_factor=spatial_factor
     )
 
-    # Synthetic vision encoder output: [B, 576, 768]
+    # Synthetic vision encoder output: [B, 256, 768]
     dummy_vis_patches = torch.randn(batch_size, num_patches, vis_dim)
     print(f"Input visual patches shape: {dummy_vis_patches.shape}")
 
@@ -48,7 +49,7 @@ def test_projector():
     )
     assert not torch.isnan(out_tokens).any(), "Projector output contains NaN!"
     assert not torch.isinf(out_tokens).any(), "Projector output contains Inf!"
-    print("Projector test PASSED! (576 patches -> 64 tokens with 0 NaN)")
+    print("Projector test PASSED! (256 patches -> 64 tokens with 0 NaN)")
 
 
 def test_ray_rope():

@@ -150,34 +150,21 @@ def evaluate_checkpoint(
     print(f"Loading Checkpoint: {checkpoint_path}")
     print(f"=======================================================")
 
-    policy = VGAPolicy(
-        normalizer=normalizer,
-        vis_dim=cfg.vis_dim,
-        lm_dim=cfg.lm_dim,
-        img_size=cfg.img_size,
-        patch_size=cfg.patch_size,
-        num_visual_tokens=cfg.num_visual_tokens,
-        num_lm_layers=12,
-        action_dim=cfg.action_dim,
-        action_horizon=cfg.action_horizon,
-        prefix_len=cfg.prefix_len,
-        dit_hidden_dim=384,
-        dit_layers=cfg.dit_layers,
-        euler_steps=cfg.euler_steps,
-        beta_jerk=cfg.beta_jerk,
-        w_rot=cfg.w_rot,
-        schmitt_low=cfg.schmitt_low,
-        schmitt_high=cfg.schmitt_high,
-    ).to(device)
-
     # Load weights (handle PyTorch 2.6+ weights_only default)
     try:
         ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     except TypeError:
         ckpt = torch.load(checkpoint_path, map_location=device)
-    if "policy_state_dict" in ckpt:
+
+    loaded_cfg = ckpt.get("config", cfg) if isinstance(ckpt, dict) else cfg
+    policy = VGAPolicy(
+        cfg=loaded_cfg,
+        normalizer=normalizer,
+    ).to(device)
+
+    if isinstance(ckpt, dict) and "policy_state_dict" in ckpt:
         state_dict = ckpt["policy_state_dict"]
-    elif "model_state_dict" in ckpt:
+    elif isinstance(ckpt, dict) and "model_state_dict" in ckpt:
         state_dict = ckpt["model_state_dict"]
     elif "policy" in ckpt:
         state_dict = ckpt["policy"]

@@ -116,28 +116,18 @@ def train_vga(
     if is_main_process:
         print("\n--- 2. Instantiating VGA Policy ---")
     policy = VGAPolicy(
+        cfg=cfg,
         normalizer=normalizer,
-        vis_dim=cfg.vis_dim,
-        lm_dim=cfg.lm_dim,
-        img_size=cfg.img_size,
-        patch_size=cfg.patch_size,
-        num_visual_tokens=cfg.num_visual_tokens,
-        num_lm_layers=12,
-        action_dim=cfg.action_dim,
-        action_horizon=cfg.action_horizon,
-        prefix_len=cfg.prefix_len,
-        dit_hidden_dim=384,
-        dit_layers=cfg.dit_layers,
-        euler_steps=cfg.euler_steps,
-        beta_jerk=cfg.beta_jerk,
-        w_rot=cfg.w_rot,
-        schmitt_low=cfg.schmitt_low,
-        schmitt_high=cfg.schmitt_high,
     ).to(device)
 
     total_params = sum(p.numel() for p in policy.parameters())
+    trainable_params = [p for p in policy.parameters() if p.requires_grad]
+    trainable_count = sum(p.numel() for p in trainable_params)
+    frozen_count = total_params - trainable_count
     if is_main_process:
-        print(f"Total Parameters: {total_params:,} ({total_params / 1e6:.1f}M) <= 0.5B ceiling")
+        print(f"Total Parameters:     {total_params:,} ({total_params / 1e6:.1f}M) <= 0.5B ceiling")
+        print(f"Frozen Backbones:     {frozen_count:,} ({frozen_count / 1e6:.1f}M) [SigLIP + SmolLM2]")
+        print(f"Trainable Parameters: {trainable_count:,} ({trainable_count / 1e6:.1f}M) [Projector + RayRoPE + DiT Expert]")
 
     # Multi-GPU wrapping
     if is_distributed:
@@ -156,9 +146,9 @@ def train_vga(
     else:
         policy_raw = policy
 
-    # 3. Setup Optimizer & Cosine Schedule
+    # 3. Setup Optimizer & Cosine Schedule (only optimizing trainable parameters)
     optimizer = torch.optim.AdamW(
-        policy.parameters(),
+        trainable_params,
         lr=lr,
         betas=(0.9, 0.95),
         weight_decay=1e-4,

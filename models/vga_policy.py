@@ -43,11 +43,11 @@ class VGAPolicy(nn.Module):
         cfg: Optional[Any] = None,
         normalizer: Optional[Normalizer] = None,
         vis_dim: int = 768,
-        lm_dim: int = 960,
+        lm_dim: int = 576,
         img_size: int = 256,
         patch_size: int = 16,
         num_visual_tokens: int = 64,
-        num_lm_layers: int = 12,
+        num_lm_layers: int = 30,
         action_dim: int = 7,
         action_horizon: int = 16,
         prefix_len: int = 4,
@@ -60,6 +60,8 @@ class VGAPolicy(nn.Module):
         schmitt_high: float = 0.60,
         min_hold_steps: int = 60,
         sigma_min: float = 1e-4,
+        pretrained: bool = True,
+        freeze_backbones: bool = True,
     ):
         super().__init__()
         if cfg is not None:
@@ -68,6 +70,7 @@ class VGAPolicy(nn.Module):
             img_size = getattr(cfg, "img_size", img_size)
             patch_size = getattr(cfg, "patch_size", patch_size)
             num_visual_tokens = getattr(cfg, "num_visual_tokens", num_visual_tokens)
+            num_lm_layers = getattr(cfg, "num_lm_layers", num_lm_layers)
             action_dim = getattr(cfg, "action_dim", action_dim)
             action_horizon = getattr(cfg, "action_horizon", action_horizon)
             prefix_len = getattr(cfg, "prefix_len", prefix_len)
@@ -78,6 +81,8 @@ class VGAPolicy(nn.Module):
             schmitt_low = getattr(cfg, "schmitt_low", schmitt_low)
             schmitt_high = getattr(cfg, "schmitt_high", schmitt_high)
             min_hold_steps = getattr(cfg, "min_hold_steps", min_hold_steps)
+            pretrained = getattr(cfg, "pretrained", pretrained)
+            freeze_backbones = getattr(cfg, "freeze_backbones", freeze_backbones)
         self.action_dim = action_dim
         self.action_horizon = action_horizon
         self.prefix_len = prefix_len
@@ -85,7 +90,7 @@ class VGAPolicy(nn.Module):
         self.sigma_min = sigma_min
         self.normalizer = normalizer
 
-        # 1. Vision-Language Encoder Backbone (~265M params)
+        # 1. Vision-Language Encoder Backbone (~228M params)
         self.encoder = VisionLanguageEncoder(
             vis_dim=vis_dim,
             lm_dim=lm_dim,
@@ -93,6 +98,8 @@ class VGAPolicy(nn.Module):
             patch_size=patch_size,
             num_visual_tokens=num_visual_tokens,
             num_lm_layers=num_lm_layers,
+            pretrained=pretrained,
+            freeze_backbones=freeze_backbones,
         )
 
         # 2. Diffusion Transformer Action Expert (~33M params)
@@ -126,6 +133,10 @@ class VGAPolicy(nn.Module):
         # 5. Runtime Action Chunk Queue for Rolling Rollouts
         self.action_queue = deque(maxlen=action_horizon)
         self.prev_chunk_tail: Optional[torch.Tensor] = None
+
+    def get_trainable_parameters(self):
+        """Returns only parameters requiring gradients (excluding frozen backbones)."""
+        return [p for p in self.parameters() if p.requires_grad]
 
     def reset(self):
         """Resets the policy action queue and gripper controller state."""

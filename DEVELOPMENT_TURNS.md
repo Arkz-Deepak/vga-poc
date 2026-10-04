@@ -248,19 +248,42 @@ Closed-loop physics simulation in MuJoCo was conducted on LIBERO-Spatial Task 0:
 | `f8723c0` | Add dynamic depth-aware approach guard and calibrate 33-step grasp depth | Grasp depth calibration |
 | `e3958c4` | Clean robosuite contact_geoms isolation, remove confusing debug output, restore natural approach | Streamlined baseline |
 | `a9cf9b0` | Restore waypoint prefix continuity for natural step 32 grasp timing | Trajectory timing fix |
-| *(Latest)* | Remove 180° image inversion, add `--flip_image` flag, and implement full policy feedback telemetry | **Dataset image parity + Rich telemetry** |
+| `1e5de67` | Remove 180° image inversion, add `--flip_image` flag, and implement full policy feedback telemetry | Dataset image parity + Rich telemetry |
+| *(Latest)* | Integrate official pretrained SigLIP & SmolLM2 backbones, freeze internet priors, align 576-dim DiT expert | **Pretrained Perception & Fast PEFT** |
 
 ---
 
-## How to Reproduce the Full Evaluation
+### Turn 13: Official Pretrained Backbones Integration (SigLIP-256 + SmolLM2-135M) & PEFT
+- **Root-Cause Analysis**:
+  1. **The Blank Perception Flaw**: The previous codebase instantiated backbones via raw `SiglipVisionModel(vis_config)` and `LlamaModel(lm_config)` with **random Gaussian weights** instead of `.from_pretrained()`. The policy was attempting to learn vision and language from scratch on 10 demonstration episodes, forcing the downstream DiT expert to memorize a single open-loop motor trajectory.
+  2. **SmolLM2 Dimension Alignment**: SmolLM2 config was updated from experimental 960 dimensions (12 layers) to official `HuggingFaceTB/SmolLM2-135M` standard (576 hidden dimension, 30 layers).
+  3. **Space-to-Depth Projector**: Operates with downscale factor 2 on 256x256 images ($16 \times 16 \to 8 \times 8 = 64$ visual tokens), projecting $768 \times 4 = 3072 \to 576$.
+- **Engineered Resolution**:
+  1. **Official Pretrained HuggingFace Weights**:
+     - Vision Backbone: `google/siglip-base-patch16-256` (92.9M params).
+     - Language Backbone: `HuggingFaceTB/SmolLM2-135M` (134.5M params).
+  2. **Frozen Internet Priors (PEFT Strategy)**:
+     - Freezes both SigLIP and SmolLM2 (227.4M params) with `requires_grad = False` to preserve rich pre-trained internet visual and linguistic concepts.
+     - Trains only the Space-to-Depth Projector (1.8M), CentroidRayRoPE (1.5M), and DiT Action Expert (33M) — totaling **36.3M trainable parameters** (total model: 263.7M params $\le 0.5\text{B}$).
+  3. **Memory & Optimizer Efficiency**:
+     - `train_vga.py` passes only trainable parameters to AdamW, cutting optimizer state memory by 85% and training 500 steps in ~3 minutes on Kaggle T4.
+  4. **Robust Checkpoint Synchronization**:
+     - Evaluation scripts (`eval_mujoco_closed_loop.py`, `evaluate_libero.py`) load checkpoint configuration first before policy instantiation, ensuring 100% parameter alignment.
 
-To evaluate the calibrated VGA model on Kaggle across 5 closed-loop simulation episodes:
+---
+
+## How to Train and Evaluate on Kaggle Cloud GPU
+
+To train and evaluate the pretrained VGA model on Kaggle across 5 closed-loop simulation episodes:
 
 ```bash
 # 1. Pull the latest commits from main
 !cd /kaggle/working/vga-poc && git pull origin main
 
-# 2. Run closed-loop evaluation on LIBERO-Spatial Task 0
+# 2. Train VGA Policy with official pretrained backbones (500 steps, ~3-4 mins on T4 GPU)
+!python /kaggle/working/vga-poc/scripts/train_vga.py --shots 10 --steps 500 --batch_size 8
+
+# 3. Run closed-loop evaluation on LIBERO-Spatial Task 0
 !python /kaggle/working/vga-poc/scripts/eval_mujoco_closed_loop.py \
     --checkpoint /kaggle/working/vga-poc/checkpoints/vga_libero_10shot.pt \
     --episodes 5

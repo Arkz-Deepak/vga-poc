@@ -11,16 +11,16 @@ Mathematical and Architectural Foundations:
      general pretrained visual features.
 
 2. Space-to-Depth & Centroid Ray-RoPE Integration:
-   - Visual patch tokens pass through `UnifiedSpaceToDepthProjector` (unshuffles 3x3 or 2x2 spatial
-     neighborhoods to yield 64 visual tokens of dimension D_{LM} = 960).
+   - Visual patch tokens pass through `UnifiedSpaceToDepthProjector` (unshuffles 2x2 spatial
+     neighborhoods to yield 64 visual tokens of dimension D_{LM} = 576).
    - `CentroidRayRoPE` assigns unit viewing rays r_ij in S^2 and injects robot camera extrinsics
      t_base via a lightweight MLP, providing zero-overhead 3D spatial awareness.
 
 3. SmolLM2 Language & Fusion Backbone:
-   - 12-layer causal language model (hidden_size = 960).
-   - Encodes language instruction string tokens T in R^{B x L x 960}.
+   - 30-layer causal language model (hidden_size = 576, intermediate_size = 1536).
+   - Encodes language instruction string tokens T in R^{B x L x 576}.
    - Visual tokens (64) and language tokens (L) are fused to produce a rich contextual embedding
-     c in R^{B x 960} to condition the DiT Action Expert.
+     c in R^{B x 576} to condition the DiT Action Expert.
 """
 
 from typing import Optional, Tuple, Union
@@ -42,12 +42,16 @@ class VisionLanguageEncoder(nn.Module):
     def __init__(
         self,
         vis_dim: int = 768,
-        lm_dim: int = 960,
+        lm_dim: int = 576,
         img_size: int = 256,
         patch_size: int = 16,
         num_visual_tokens: int = 64,
-        num_lm_layers: int = 12,
-        use_lora: bool = True,
+        num_lm_layers: int = 30,
+        pretrained: bool = True,
+        freeze_backbones: bool = True,
+        vision_model_name: str = "google/siglip-base-patch16-256",
+        lm_model_name: str = "HuggingFaceTB/SmolLM2-135M",
+        use_lora: bool = False,
         lora_rank: int = 8,
     ):
         super().__init__()
@@ -56,21 +60,38 @@ class VisionLanguageEncoder(nn.Module):
         self.img_size = img_size
         self.patch_size = patch_size
         self.num_visual_tokens = num_visual_tokens
+        self.pretrained = pretrained
+        self.freeze_backbones = freeze_backbones
+        self.vision_model_name = vision_model_name
+        self.lm_model_name = lm_model_name
 
-        # 1. SigLIP Vision Backbone
-        vis_config = SiglipVisionConfig(
-            image_size=img_size,
-            patch_size=patch_size,
-            hidden_size=vis_dim,
-            num_hidden_layers=12,
-            num_attention_heads=12,
-            intermediate_size=3072,
-        )
-        self.vision_model = SiglipVisionModel(vis_config)
+        # 1. SigLIP Vision Backbone (92.9M parameters)
+        loaded_pretrained_vision = False
+        if pretrained:
+            try:
+                self.vision_model = SiglipVisionModel.from_pretrained(
+                    vision_model_name,
+                    torch_dtype=torch.float32,
+                )
+                loaded_pretrained_vision = True
+                print(f"✅ Loaded official pretrained SigLIP vision backbone ({vision_model_name})")
+            except Exception as e:
+                print(f"⚠️ Warning: Could not load pretrained SigLIP ({e}). Falling back to fresh config.")
+
+        if not loaded_pretrained_vision:
+            vis_config = SiglipVisionConfig(
+                image_size=img_size,
+                patch_size=patch_size,
+                hidden_size=vis_dim,
+                num_hidden_layers=12,
+                num_attention_heads=12,
+                intermediate_size=3072,
+            )
+            self.vision_model = SiglipVisionModel(vis_config)
 
         # 2. Space-to-Depth Projector (e.g. 256 patches -> 64 tokens)
         grid_dim = img_size // patch_size  # e.g., 256 / 16 = 16, or 384 / 16 = 24
-        spatial_factor = grid_dim // int(num_visual_tokens ** 0.5)  # e.g., 16 / 8 = 2, or 24 / 8 = 3
+        spatial_factor = grid_dim // int(num_visual_tokens ** 0.5)  # e.g., 16 / 8 = 2
         self.projector = UnifiedSpaceToDepthProjector(
             vis_dim=vis_dim,
             lm_dim=lm_dim,
@@ -82,25 +103,46 @@ class VisionLanguageEncoder(nn.Module):
             lm_dim=lm_dim,
         )
 
-        # 4. SmolLM2 Language Backbone
-        lm_config = LlamaConfig(
-            vocab_size=49152,
-            hidden_size=lm_dim,
-            intermediate_size=2560,
-            num_hidden_layers=num_lm_layers,
-            num_attention_heads=15,
-            num_key_value_heads=5,
-            max_position_embeddings=2048,
-        )
-        self.language_model = LlamaModel(lm_config)
+        # 4. SmolLM2 Language Backbone (134.5M parameters)
+        loaded_pretrained_lm = False
+        if pretrained:
+            try:
+                self.language_model = LlamaModel.from_pretrained(
+                    lm_model_name,
+                    torch_dtype=torch.float32,
+                )
+                loaded_pretrained_lm = True
+                print(f"✅ Loaded official pretrained SmolLM2 language backbone ({lm_model_name})")
+            except Exception as e:
+                print(f"⚠️ Warning: Could not load pretrained SmolLM2 ({e}). Falling back to fresh config.")
 
-        # 5. Tokenizer helper
+        if not loaded_pretrained_lm:
+            lm_config = LlamaConfig(
+                vocab_size=49152,
+                hidden_size=lm_dim,
+                intermediate_size=1536,
+                num_hidden_layers=num_lm_layers,
+                num_attention_heads=9,
+                num_key_value_heads=3,
+                max_position_embeddings=2048,
+            )
+            self.language_model = LlamaModel(lm_config)
+
+        # 5. Freeze Backbones if requested
+        if freeze_backbones:
+            for p in self.vision_model.parameters():
+                p.requires_grad = False
+            for p in self.language_model.parameters():
+                p.requires_grad = False
+            print("❄️ Frozen SigLIP & SmolLM2 backbones: internet perception priors locked. Training Projector, RayRoPE & DiT Expert.")
+
+        # 6. Tokenizer helper
         self.tokenizer = None
 
     def get_tokenizer(self):
         if self.tokenizer is None:
             try:
-                self.tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-135M")
+                self.tokenizer = AutoTokenizer.from_pretrained(self.lm_model_name)
                 if self.tokenizer.pad_token is None:
                     self.tokenizer.pad_token = self.tokenizer.eos_token
             except Exception:
@@ -130,18 +172,18 @@ class VisionLanguageEncoder(nn.Module):
         patch_tokens = vis_outputs.last_hidden_state  # [B, N_patches, 768]
 
         # 2. Compress patch tokens to 64 tokens via Space-to-Depth
-        compressed_vis_tokens = self.projector(patch_tokens)  # [B, 64, 960]
+        compressed_vis_tokens = self.projector(patch_tokens)  # [B, 64, lm_dim] (e.g. 576)
 
         # 3. Ground visual tokens with 3D viewing rays via Ray-RoPE
         if camera_origin is None:
             camera_origin = torch.zeros((image_front.shape[0], 3), device=image_front.device, dtype=image_front.dtype)
-        grounded_vis_tokens = self.ray_rope(compressed_vis_tokens, t_base_cam=camera_origin)  # [B, 64, 960]
+        grounded_vis_tokens = self.ray_rope(compressed_vis_tokens, t_base_cam=camera_origin)  # [B, 64, lm_dim]
 
         # 4. Extract language embeddings from SmolLM2
-        lang_inputs_embeds = self.language_model.embed_tokens(input_ids)  # [B, seq_len, 960]
+        lang_inputs_embeds = self.language_model.embed_tokens(input_ids)  # [B, seq_len, lm_dim]
 
         # 5. Concatenate grounded visual tokens and language tokens
-        # [B, 64 + seq_len, 960]
+        # [B, 64 + seq_len, lm_dim]
         multimodal_seq = torch.cat([grounded_vis_tokens, lang_inputs_embeds], dim=1)
 
         # Create combined attention mask
@@ -158,11 +200,11 @@ class VisionLanguageEncoder(nn.Module):
             inputs_embeds=multimodal_seq,
             attention_mask=combined_mask,
         )
-        fused_hidden = lm_outputs.last_hidden_state  # [B, 64 + seq_len, 960]
+        fused_hidden = lm_outputs.last_hidden_state  # [B, 64 + seq_len, lm_dim]
 
         # 7. Mean pool over the multimodal sequence to produce conditioning vector c
         # (ignoring padding tokens via the attention mask)
         mask_expanded = combined_mask.unsqueeze(-1).float()
         context = (fused_hidden * mask_expanded).sum(dim=1) / mask_expanded.sum(dim=1).clamp(min=1.0)
 
-        return context  # [B, 960]
+        return context  # [B, lm_dim]

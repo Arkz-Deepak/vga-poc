@@ -130,7 +130,7 @@ class DiTActionExpert(nn.Module):
         action_dim: int = 7,
         action_horizon: int = 16,
         prefix_len: int = 4,
-        context_dim: int = 960,       # Matches SmolLM2 / fused context dimension
+        context_dim: int = 576,       # Matches SmolLM2-135M / fused context dimension
         hidden_dim: int = 384,        # Lightweight DiT hidden dimension for sub-18ms latency
         num_heads: int = 6,
         num_layers: int = 12,

@@ -13,14 +13,16 @@ from typing import List
 class ModelConfig:
     # 1. Vision & Space-to-Depth Projector
     vis_dim: int = 768            # SigLIP-B/16 output embedding dimension per patch token
-    lm_dim: int = 960             # SmolLM2 hidden state dimension (language & fusion backbone)
-    spatial_factor: int = 3       # Space-to-depth downscaling factor (3x3 spatial pooling)
+    lm_dim: int = 576             # SmolLM2-135M hidden state dimension (language & fusion backbone)
+    spatial_factor: int = 2       # Space-to-depth downscaling factor (16x16 patches -> 8x8 = 64 visual tokens)
     img_size: int = 256           # Input camera image resolution (256x256 RGB)
     patch_size: int = 16          # SigLIP patch size: 256 / 16 = 16 patches per axis (16x16 = 256 patches)
-    # Note: If SigLIP takes 384x384 -> 24x24 patches (576 patches) -> 3x unshuffle -> 8x8 = 64 tokens.
-    # For 256x256 with patch 16: 16x16 = 256 patches. With 2x unshuffle -> 8x8 = 64 tokens.
-    # In the spec, 24x24 grid -> 3x downscale factor -> 8x8 = 64 tokens.
     num_visual_tokens: int = 64   # Final token count after space-to-depth compression (8x8 grid)
+    num_lm_layers: int = 30       # Official SmolLM2-135M layer count (30 layers)
+    pretrained_vision_model: str = "google/siglip-base-patch16-256"
+    pretrained_lm_model: str = "HuggingFaceTB/SmolLM2-135M"
+    pretrained: bool = True       # Load official pretrained weights from HuggingFace
+    freeze_backbones: bool = True # Freeze backbones; only train Projector, RayRoPE & DiT expert
 
     # 2. Geometry & Ray-RoPE
     num_heads_rope: int = 8       # Multi-head attention heads in Ray-RoPE pre-pass

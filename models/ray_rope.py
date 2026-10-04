@@ -30,7 +30,7 @@ class CentroidRayRoPE(nn.Module):
     """
     Assigns 3D physical ray directions and camera position vectors to the 64 visual tokens.
     """
-    def __init__(self, lm_dim: int = 960, num_heads: int = 8, origin_hidden: int = 256):
+    def __init__(self, lm_dim: int = 576, num_heads: int = 8, origin_hidden: int = 256):
         super().__init__()
         self.lm_dim = lm_dim
         self.num_heads = num_heads

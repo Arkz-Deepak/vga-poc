@@ -30,17 +30,17 @@ class UnifiedSpaceToDepthProjector(nn.Module):
     Compresses high-resolution visual patch tokens into a compact grid of 64 tokens
     via pixel unshuffle followed by a linear projection to language model dimension.
     """
-    def __init__(self, vis_dim: int = 768, lm_dim: int = 960, spatial_factor: int = 3):
+    def __init__(self, vis_dim: int = 768, lm_dim: int = 576, spatial_factor: int = 2):
         super().__init__()
         self.vis_dim = vis_dim
         self.lm_dim = lm_dim
         self.spatial_factor = spatial_factor
         
-        # in_features = 768 * (3^2) = 768 * 9 = 6912
-        # When 3x3 adjacent patches are un-shuffled into channel depth, channels multiply by factor^2
+        # in_features = 768 * (2^2) = 768 * 4 = 3072
+        # When 2x2 adjacent patches are un-shuffled into channel depth, channels multiply by factor^2
         self.in_features = vis_dim * (spatial_factor ** 2)
         
-        # Projection layer: maps from 6912 -> 960 (SmolLM2 hidden dimension)
+        # Projection layer: maps from 3072 -> 576 (SmolLM2-135M hidden dimension)
         self.proj = nn.Linear(self.in_features, lm_dim, bias=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

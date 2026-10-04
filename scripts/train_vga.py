@@ -158,6 +158,11 @@ def train_vga(
         betas=(0.9, 0.95),
         weight_decay=1e-4,
     )
+    lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=num_steps,
+        eta_min=lr * 0.05,
+    )
 
     # 4. Training Loop
     if is_main_process:
@@ -198,7 +203,7 @@ def train_vga(
         curr_lambda_kin = cfg.max_lambda_kin * min(1.0, step / max(1, cfg.kinematic_anneal_steps))
 
         optimizer.zero_grad()
-        loss_dict = policy_raw.forward_loss(
+        loss_dict = policy(
             image_front=img_front,
             input_ids=input_ids,
             actions=actions,
@@ -206,20 +211,21 @@ def train_vga(
             lambda_kin=curr_lambda_kin,
         )
 
-        loss = loss_dict["loss"]
+        loss = loss_dict["loss"].mean() if loss_dict["loss"].dim() > 0 else loss_dict["loss"]
         loss.backward()
 
         # Gradient clipping for training stability
         torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=1.0)
         optimizer.step()
+        lr_scheduler.step()
 
         step += 1
 
         if is_main_process and (step % 50 == 0 or step == num_steps):
             elapsed = time.time() - t_start
-            flow_l = loss_dict["flow_loss"].item()
-            acc_l = loss_dict["acc_loss"].item()
-            jerk_l = loss_dict["jerk_loss"].item()
+            flow_l = loss_dict["flow_loss"].mean().item()
+            acc_l = loss_dict["acc_loss"].mean().item()
+            jerk_l = loss_dict["jerk_loss"].mean().item()
             print(
                 f"[Step {step:4d}/{num_steps}] "
                 f"Loss: {loss.item():.4f} | "

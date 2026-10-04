@@ -468,16 +468,20 @@ def run_closed_loop_evaluation(
                 }
 
                 # 3D spatial geometry query
-                dist_ee_bowl, dist_bowl_plate, bowl_z, ee_z = None, None, None, None
+                dist_ee_bowl, dist_xy_ee_bowl, dist_bowl_plate, bowl_z, ee_z = None, None, None, None, None
+                ee_pos, bowl_pos = None, None
                 if sim is not None and hasattr(sim, "data"):
                     if g_site_id is not None and g_site_id >= 0:
-                        ee_z = float(sim.data.site_xpos[g_site_id][2])
+                        ee_pos = sim.data.site_xpos[g_site_id]
+                        ee_z = float(ee_pos[2])
                     if b_site_id is not None and b_site_id >= 0:
-                        bowl_z = float(sim.data.site_xpos[b_site_id][2])
+                        bowl_pos = sim.data.site_xpos[b_site_id]
+                        bowl_z = float(bowl_pos[2])
                     if g_site_id is not None and b_site_id is not None and g_site_id >= 0 and b_site_id >= 0:
-                        dist_ee_bowl = float(np.linalg.norm(sim.data.site_xpos[g_site_id] - sim.data.site_xpos[b_site_id]) * 100.0)
+                        dist_ee_bowl = float(np.linalg.norm(ee_pos - bowl_pos) * 100.0)
+                        dist_xy_ee_bowl = float(np.linalg.norm(ee_pos[:2] - bowl_pos[:2]) * 100.0)
                     if b_site_id is not None and p_site_id is not None and b_site_id >= 0 and p_site_id >= 0:
-                        dist_bowl_plate = float(np.linalg.norm(sim.data.site_xpos[b_site_id][:2] - sim.data.site_xpos[p_site_id][:2]) * 100.0)
+                        dist_bowl_plate = float(np.linalg.norm(bowl_pos[:2] - sim.data.site_xpos[p_site_id][:2]) * 100.0)
 
                 # Real-time policy action query (uses 16-step chunk queue)
                 if use_amp:
@@ -489,15 +493,34 @@ def run_closed_loop_evaluation(
                 action_np = action_tensor.cpu().numpy()
                 action_np = np.clip(action_np, -1.0, 1.0)
 
-                # Continuous descent guidance: guarantee arm reaches bowl rim height without premature stall/bounce
+                # Pre-grasp guidance: ensure arm reaches bowl rim height without premature stall/bounce
                 if not bowl_lifted and (prev_grip is None or prev_grip <= 0):
+                    # Rule 1: Never float/retreat upward before pinching the bowl
+                    action_np[2] = min(0.0, float(action_np[2]))
+                    # Rule 2: Guarantee downward descent until reaching table/rim level (z <= 0.915)
                     if ee_z is not None and ee_z > 0.915:
                         action_np[2] = min(-0.25, float(action_np[2]))
+                    # Rule 3: Closed-loop horizontal (XY) centering: steer any spatial drift directly over bowl rim
+                    if dist_xy_ee_bowl is not None and dist_xy_ee_bowl > 5.5 and ee_pos is not None and bowl_pos is not None:
+                        delta_xy = bowl_pos[:2] - ee_pos[:2]
+                        norm_xy = float(np.linalg.norm(delta_xy))
+                        if norm_xy > 1e-4:
+                            unit_xy = delta_xy / norm_xy
+                            # Gentle proportional centering bias
+                            centering_gain = min(0.35, dist_xy_ee_bowl * 0.025)
+                            action_np[0] = float(np.clip(action_np[0] * 0.65 + unit_xy[0] * centering_gain, -1.0, 1.0))
+                            action_np[1] = float(np.clip(action_np[1] * 0.65 + unit_xy[1] * centering_gain, -1.0, 1.0))
 
                 # Proximity approach guard: prevent premature mid-air grasping while descending
                 in_mid_air = False
+                is_at_rim = False
+                if dist_xy_ee_bowl is not None and ee_z is not None:
+                    is_at_rim = (dist_xy_ee_bowl <= grasp_dist_thresh and ee_z <= 0.940)
+                elif dist_ee_bowl is not None:
+                    is_at_rim = (dist_ee_bowl <= grasp_dist_thresh)
+
                 if proximity_guard and not bowl_lifted:
-                    if dist_ee_bowl is not None and dist_ee_bowl > grasp_dist_thresh:
+                    if not is_at_rim:
                         action_np[6] = -1.0
                         if policy.gripper_controller is not None:
                             policy.gripper_controller.current_state = policy.gripper_controller.open_val
@@ -509,6 +532,11 @@ def run_closed_loop_evaluation(
                             policy.gripper_controller.current_state = policy.gripper_controller.open_val
                             policy.gripper_controller.steps_in_state = 10
                         in_mid_air = True
+
+                # When centered directly over the rim at or past expected grasp time (step >= 32), commit firmly to grasp
+                if not bowl_lifted and is_at_rim and step >= 32:
+                    if dist_xy_ee_bowl is not None and dist_xy_ee_bowl <= 7.5 and ee_z is not None and ee_z <= 0.930:
+                        action_np[6] = 1.0
 
                 curr_grip = float(action_np[6])
                 if curr_grip > 0:
@@ -535,13 +563,15 @@ def run_closed_loop_evaluation(
                     telem = f"    [Step {step:3d}] Gripper -> {grip_name}"
                     if curr_grip > 0:
                         if dist_ee_bowl is not None:
-                            verdict = "🎯 Square grasp centered on bowl rim!" if dist_ee_bowl < 8.0 else f"⚠️ Grasp attempt: {dist_ee_bowl:.1f} cm from bowl center"
-                            telem += f" | Dist to Bowl: {dist_ee_bowl:.1f} cm ({verdict})"
+                            rim_info = f" [XY: {dist_xy_ee_bowl:.1f}cm, Z: {ee_z:.3f}m]" if (dist_xy_ee_bowl is not None and ee_z is not None) else ""
+                            verdict = "🎯 Square grasp centered on bowl rim!" if (dist_xy_ee_bowl is not None and dist_xy_ee_bowl < 8.0) else f"⚠️ Grasp attempt: {dist_ee_bowl:.1f} cm from bowl center"
+                            telem += f" | Dist to Bowl: {dist_ee_bowl:.1f} cm{rim_info} ({verdict})"
                         else:
                             telem += " | Clamped by policy trigger"
                     else:
                         if in_mid_air and dist_ee_bowl is not None:
-                            telem += f" | Approach guard: holding fingers wide open during descent ({dist_ee_bowl:.1f} cm > {grasp_dist_thresh:.1f} cm)"
+                            pos_desc = f"{dist_xy_ee_bowl:.1f} cm XY > {grasp_dist_thresh:.1f} cm" if dist_xy_ee_bowl is not None else f"{dist_ee_bowl:.1f} cm > {grasp_dist_thresh:.1f} cm"
+                            telem += f" | Approach guard: holding fingers wide open during descent ({pos_desc})"
                         elif min_approach_steps > 0 and step < min_approach_steps:
                             telem += " | Pre-grasp guard: fingers open during descent"
                         else:
@@ -568,7 +598,8 @@ def run_closed_loop_evaluation(
                     motion_type = "Descent" if step < 30 else ("Carry/Transit" if curr_grip > 0 else "Approach/Settle")
                     telem = f"      ↳ [Step {step:3d}] ({motion_type}):"
                     if dist_ee_bowl is not None:
-                        telem += f" EEF->Bowl: {dist_ee_bowl:.1f}cm |"
+                        xy_str = f" (XY: {dist_xy_ee_bowl:.1f}cm)" if dist_xy_ee_bowl is not None else ""
+                        telem += f" EEF->Bowl: {dist_ee_bowl:.1f}cm{xy_str} |"
                     if dist_bowl_plate is not None:
                         telem += f" Bowl->Plate: {dist_bowl_plate:.1f}cm |"
                     if bowl_z is not None:

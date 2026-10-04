@@ -74,11 +74,11 @@ class Normalizer:
             self.stats_path = str(target_path)
         else:
             # Fallback to empirical LIBERO-Spatial default statistics so execution never crashes
-            self.mu_d = torch.tensor([0.151027, 0.137611, -0.162227, -0.004842, -0.013472, -0.018787, 0.075200], dtype=torch.float32)
-            self.sigma_d = torch.tensor([0.424873, 0.342092, 0.521629, 0.037738, 0.069286, 0.058263, 0.997175], dtype=torch.float32)
+            self.mu_d = torch.tensor([0.172505, 0.101684, -0.144693, 0.009553, 0.000129, -0.032239, -0.012093], dtype=torch.float32)
+            self.sigma_d = torch.tensor([0.507023, 0.206400, 0.616726, 0.043281, 0.075032, 0.068463, 0.999927], dtype=torch.float32)
             self.sigma_d = torch.clamp(self.sigma_d, min=1e-5)
-            self.sigma_pos_sq = 0.18988015
-            self.sigma_rot_sq = 0.00321151
+            self.sigma_pos_sq = 0.22667457
+            self.sigma_rot_sq = 0.00406339
             self.stats_path = "default_empirical"
 
     def normalize(self, actions: torch.Tensor) -> torch.Tensor:
@@ -161,7 +161,12 @@ class LiberoSpatialDataset(Dataset):
         if hasattr(self.dataset, "meta") and hasattr(self.dataset.meta, "episodes") and self.dataset.meta.episodes is not None:
             ep_meta = self.dataset.meta.episodes
             num_ep = len(ep_meta)
-            cols = ep_meta.column_names if hasattr(ep_meta, "column_names") else list(ep_meta.features.keys()) if hasattr(ep_meta, "features") else []
+            cols = (
+                ep_meta.column_names if hasattr(ep_meta, "column_names")
+                else list(ep_meta.columns) if hasattr(ep_meta, "columns")
+                else list(ep_meta.features.keys()) if hasattr(ep_meta, "features")
+                else []
+            )
             from_col = "dataset_from_index" if "dataset_from_index" in cols else None
             to_col = "dataset_to_index" if "dataset_to_index" in cols else None
             tasks_col = "tasks" if "tasks" in cols else None
@@ -224,12 +229,13 @@ class LiberoSpatialDataset(Dataset):
 
             matched_target = None
             for target in self.target_tasks:
-                target_clean = target.lower()
-                target_words = target.replace("_", " ").lower()
+                target_clean = target.lower().strip()
+                target_words = target.replace("_", " ").lower().strip()
 
-                if (target_clean in task_clean or 
-                    target_words in task_str.lower() or 
-                    any(word in task_str.lower() for word in ["black bowl", "stove", "ramekin", "basket"])):
+                if (target_clean == task_clean or 
+                    target_clean in task_clean or 
+                    target_words == task_str.lower().strip() or 
+                    target_words in task_str.lower()):
                     matched_target = target
                     break
 
@@ -246,7 +252,12 @@ class LiberoSpatialDataset(Dataset):
             limit = min(shots_per_task * len(self.target_tasks) if shots_per_task else 15, len(all_eps) - offset)
             selected = all_eps[offset : offset + limit]
 
-        print(f"Filtered {len(selected)} episodes matching targets across {len(all_eps)} total episodes (skipped initial {skip_per_task}/task).")
+        print(f"Filtered {len(selected)} episodes matching targets across {len(all_eps)} total episodes (skipped initial {skip_per_task}/task):")
+        for ep in selected[:5]:
+            t_display = str(ep['task']).replace("['", "").replace("']", "")[:70]
+            print(f"  - Episode {ep['ep_idx']:3d} ({ep['to'] - ep['from']} frames): {t_display}")
+        if len(selected) > 5:
+            print(f"  ... and {len(selected) - 5} more episodes matching target tasks.")
         return selected
 
     def _build_frame_indices(self) -> List[Tuple[int, int, int]]:

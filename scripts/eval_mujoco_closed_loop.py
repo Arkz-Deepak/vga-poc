@@ -260,6 +260,8 @@ def run_closed_loop_evaluation(
     friction_boost: float = 3.5,
     grasp_settle_steps: int = 6,
     flip_image: bool = True,
+    grasp_dist_thresh: float = 10.5,
+    proximity_guard: bool = True,
 ):
     print("=================================================================")
     print("   VGA Closed-Loop MuJoCo Simulation Benchmark (LIBERO-Spatial)   ")
@@ -439,6 +441,8 @@ def run_closed_loop_evaluation(
             bowl_lifted = False
             bowl_slipped = False
 
+            settle_counter = 0
+
             for step in range(max_steps_per_episode):
                 # Format visual observation [H, W, 3] -> [1, 3, H, W]
                 # LeRobot returns dict with "pixels": {"image": ..., "image2": ...}
@@ -485,14 +489,40 @@ def run_closed_loop_evaluation(
                 action_np = action_tensor.cpu().numpy()
                 action_np = np.clip(action_np, -1.0, 1.0)
 
-                # Optional initial approach guard (disabled by default when min_approach_steps=0)
-                if min_approach_steps > 0 and step < min_approach_steps:
-                    action_np[6] = -1.0
-                    policy.gripper_controller.reset(initial_state=-1.0)
+                # Proximity approach guard: prevent premature mid-air grasping while descending
+                in_mid_air = False
+                if proximity_guard and not bowl_lifted:
+                    if dist_ee_bowl is not None and dist_ee_bowl > grasp_dist_thresh:
+                        action_np[6] = -1.0
+                        if policy.gripper_controller is not None:
+                            policy.gripper_controller.current_state = policy.gripper_controller.open_val
+                            policy.gripper_controller.steps_in_state = 10
+                        in_mid_air = True
+                    elif min_approach_steps > 0 and step < min_approach_steps:
+                        action_np[6] = -1.0
+                        if policy.gripper_controller is not None:
+                            policy.gripper_controller.current_state = policy.gripper_controller.open_val
+                            policy.gripper_controller.steps_in_state = 10
+                        in_mid_air = True
 
                 curr_grip = float(action_np[6])
                 if curr_grip > 0:
                     closed_steps += 1
+
+                # If gripper just transitioned to closed, start grasp settle countdown
+                if curr_grip > 0 and (prev_grip is None or prev_grip <= 0):
+                    settle_counter = grasp_settle_steps
+
+                # During grasp dwell/settle: hold downward/level position so fingers firmly pinch rim before lifting
+                if settle_counter > 0 and not bowl_lifted:
+                    settle_counter -= 1
+                    action_np[2] = min(0.0, float(action_np[2]))  # prevent premature upward pull
+                    action_np[6] = 1.0  # hold maximum clamp
+
+                # Once arrived over target plate during transport, release min_hold_steps so bowl can be placed cleanly
+                if bowl_lifted and dist_bowl_plate is not None and dist_bowl_plate < 9.0:
+                    if policy.gripper_controller is not None:
+                        policy.gripper_controller.min_hold_steps = 0
 
                 # Monitor gripper state changes with rich explanatory feedback
                 if prev_grip is None or (curr_grip > 0 and prev_grip <= 0) or (curr_grip <= 0 and prev_grip > 0):
@@ -500,12 +530,14 @@ def run_closed_loop_evaluation(
                     telem = f"    [Step {step:3d}] Gripper -> {grip_name}"
                     if curr_grip > 0:
                         if dist_ee_bowl is not None:
-                            verdict = "🎯 Square grasp centered on bowl rim!" if dist_ee_bowl < 3.5 else f"⚠️ Grasp attempt: {dist_ee_bowl:.1f} cm from bowl center"
+                            verdict = "🎯 Square grasp centered on bowl rim!" if dist_ee_bowl < 8.0 else f"⚠️ Grasp attempt: {dist_ee_bowl:.1f} cm from bowl center"
                             telem += f" | Dist to Bowl: {dist_ee_bowl:.1f} cm ({verdict})"
                         else:
                             telem += " | Clamped by policy trigger"
                     else:
-                        if min_approach_steps > 0 and step < min_approach_steps:
+                        if in_mid_air and dist_ee_bowl is not None:
+                            telem += f" | Approach guard: holding fingers wide open during descent ({dist_ee_bowl:.1f} cm > {grasp_dist_thresh:.1f} cm)"
+                        elif min_approach_steps > 0 and step < min_approach_steps:
                             telem += " | Pre-grasp guard: fingers open during descent"
                         else:
                             telem += " | Policy commanded gripper OPEN"
@@ -656,8 +688,12 @@ def main():
                         help="Steps to dwell and clamp at grasp depth before lifting (default: 6)")
     parser.add_argument("--flip_image", dest="flip_image", action="store_true", default=True,
                         help="Whether to apply 180° rotation to camera images matching LeRobot LiberoProcessorStep convention (default: True)")
-    parser.add_argument("--no_flip_image", dest="flip_image", action="store_false",
-                        help="Disable 180° rotation (use raw unrotated MuJoCo OpenGL image)")
+    parser.add_argument("--grasp_dist_thresh", type=float, default=10.5,
+                        help="Distance threshold in cm below which gripper is permitted to close (default: 10.5 cm)")
+    parser.add_argument("--proximity_guard", dest="proximity_guard", action="store_true", default=True,
+                        help="Enable proximity grasp guard preventing premature mid-air clamping (default: True)")
+    parser.add_argument("--no_proximity_guard", dest="proximity_guard", action="store_false",
+                        help="Disable proximity grasp guard")
     parser.add_argument("--output_json", type=str, default="results/closed_loop_simulation_results.json",
                         help="Path to save simulation metrics JSON")
     args = parser.parse_args()
@@ -682,6 +718,8 @@ def main():
         friction_boost=args.friction_boost,
         grasp_settle_steps=args.grasp_settle_steps,
         flip_image=args.flip_image,
+        grasp_dist_thresh=args.grasp_dist_thresh,
+        proximity_guard=args.proximity_guard,
     )
 
 

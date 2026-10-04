@@ -491,7 +491,7 @@ def run_closed_loop_evaluation(
 
                 # Continuous descent guidance: guarantee arm reaches bowl rim height without premature stall/bounce
                 if not bowl_lifted and (prev_grip is None or prev_grip <= 0):
-                    if ee_z is not None and ee_z > 0.925:
+                    if ee_z is not None and ee_z > 0.915:
                         action_np[2] = min(-0.25, float(action_np[2]))
 
                 # Proximity approach guard: prevent premature mid-air grasping while descending
@@ -549,8 +549,8 @@ def run_closed_loop_evaluation(
                     print(telem)
                 prev_grip = curr_grip
 
-                # Track physical lift and slip events
-                if bowl_z is not None and not bowl_lifted and bowl_z > 0.94:
+                # Track physical lift and slip events (only valid when gripper is actively clamped)
+                if bowl_z is not None and not bowl_lifted and curr_grip > 0 and bowl_z > 0.935:
                     bowl_lifted = True
                     plate_str = f" | Dist to Plate: {dist_bowl_plate:.1f} cm" if dist_bowl_plate is not None else ""
                     print(f"    [Step {step:3d}] 📦 Bowl LIFTED off table! Bowl Z: {bowl_z:.3f} m (Table: 0.898 m){plate_str}")
@@ -693,6 +693,8 @@ def main():
                         help="Steps to dwell and clamp at grasp depth before lifting (default: 6)")
     parser.add_argument("--flip_image", dest="flip_image", action="store_true", default=True,
                         help="Whether to apply 180° rotation to camera images matching LeRobot LiberoProcessorStep convention (default: True)")
+    parser.add_argument("--no_flip_image", dest="flip_image", action="store_false",
+                        help="Disable 180° rotation")
     parser.add_argument("--grasp_dist_thresh", type=float, default=7.8,
                         help="Distance threshold in cm below which gripper is permitted to close (default: 7.8 cm)")
     parser.add_argument("--proximity_guard", dest="proximity_guard", action="store_true", default=True,

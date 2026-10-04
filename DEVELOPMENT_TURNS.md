@@ -211,8 +211,19 @@ Closed-loop physics simulation in MuJoCo was conducted on LIBERO-Spatial Task 0:
 - **Root Cause Analysis**:
   When `prefix_waypoints=None` was set in commit `3807ef3`, Chunk 1 lost waypoint momentum from Chunk 0, delaying the approach and grasp from **Step 32 to Step 44**. In the original Video 3 rollout (commit `c0e95a6`), `prefix_waypoints=self.prev_chunk_tail` provided the necessary chunk-to-chunk continuity that drove the robot arm down to the bowl at Step 32.
 - **Engineered Resolution**:
-  1. **Restored Prefix Waypoints**: Passed `prefix_waypoints=self.prev_chunk_tail` in `models/vga_policy.py`, restoring the fast, smooth descent toward the bowl rim.
-  2. **Preserved Clean Contact Geom Friction**: Kept the isolated 5-geom contact pad friction boost ($\mu = 3.5$) and `env.check_success()` verification.
+### Turn 12: Resolving Image Orientation Mismatch & Adding Full Policy Thought Telemetry
+- **User Discovery**:
+  > *"When I saw the training data and the output display video, there is a single problem: the images are rotated 90° or 180° in the training data vs resulting data... Also, for everything that it thinks and every step it takes, I need feedback: why did it do it, and which condition occurred? Can you print everything in the terminal?"*
+- **Root Cause Analysis**:
+  1. In commit `f8fa49c`, `img_front_np[::-1, ::-1]` was added under the false assumption that raw MuJoCo renders inverted images. However, LeRobot's `LiberoEnv` already handles the OpenGL inversion internally. Applying `[::-1, ::-1]` was flipping an already-upright camera observation completely upside-down (placing the robot base at the ceiling). The model was trained on upright images but was receiving upside-down frames during evaluation.
+  2. The terminal output only printed binary gripper state changes without exposing *why* the policy took actions, whether it was near the bowl, if the bowl was lifted, or if an object slipped.
+- **Engineered Resolution**:
+  1. **Default Upright Image Orientation**: Reset default orientation to upright (`flip_image=False`), restoring bit-level visual parity with `lerobot/libero_spatial_image` training data. Added `--flip_image` CLI toggle for optional experimentation.
+  2. **Full Step-by-Step Spatial Telemetry**:
+     - Real-time 3D tracking: computes exact Euclidean distance from End-Effector to Bowl (`gripper0_grip_site` -> `akita_black_bowl_1_default_site`) and Bowl to Plate.
+     - Grasp Quality Verdict: outputs whether clamping occurred squarely on the bowl rim (<3.5 cm) or in empty air.
+     - Physical State Change Events: automatically reports when the bowl is lifted off the table (`📦 Bowl LIFTED!`) and detects if the bowl drops back down (`⚠️ SLIP DETECTED`).
+     - Periodic 25-step feedback: prints motion phase (Descent, Carry/Transit, Release/Settle), current coordinates, and predicted delta velocity vectors.
 
 ---
 
@@ -236,7 +247,8 @@ Closed-loop physics simulation in MuJoCo was conducted on LIBERO-Spatial Task 0:
 | `64aac4c` | Fix 163-geom suffix match, add multi-source BDDL check_success, add spatial telemetry | Success hook & telemetry |
 | `f8723c0` | Add dynamic depth-aware approach guard and calibrate 33-step grasp depth | Grasp depth calibration |
 | `e3958c4` | Clean robosuite contact_geoms isolation, remove confusing debug output, restore natural approach | Streamlined baseline |
-| *(Latest)* | Restore waypoint prefix continuity and pair with clean 5-geom friction boost | **Exact Video 3 baseline + Zero slip** |
+| `a9cf9b0` | Restore waypoint prefix continuity for natural step 32 grasp timing | Trajectory timing fix |
+| *(Latest)* | Remove 180° image inversion, add `--flip_image` flag, and implement full policy feedback telemetry | **Dataset image parity + Rich telemetry** |
 
 ---
 

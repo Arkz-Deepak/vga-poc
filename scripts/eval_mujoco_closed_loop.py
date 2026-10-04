@@ -259,6 +259,7 @@ def run_closed_loop_evaluation(
     min_approach_steps: int = 25,
     friction_boost: float = 3.5,
     grasp_settle_steps: int = 6,
+    flip_image: bool = False,
 ):
     print("=================================================================")
     print("   VGA Closed-Loop MuJoCo Simulation Benchmark (LIBERO-Spatial)   ")
@@ -423,11 +424,33 @@ def run_closed_loop_evaluation(
             policy.reset()
             obs, info = env.reset(seed=ep + 100)  # Use fixed seed for reproducibility
             boost_gripper_friction(env, friction_val=friction_boost)
+
+            # Query MuJoCo 3D sites for real-time telemetry
+            raw_env = getattr(env, "_env", getattr(env, "env", env))
+            inner_env = getattr(raw_env, "env", raw_env)
+            sim = getattr(raw_env, "sim", getattr(inner_env, "sim", None))
+            g_site_id, b_site_id, p_site_id = None, None, None
+            if sim is not None and hasattr(sim, "model") and hasattr(sim.model, "site_name2id"):
+                try:
+                    g_site_id = sim.model.site_name2id("gripper0_grip_site")
+                except Exception:
+                    pass
+                try:
+                    b_site_id = sim.model.site_name2id("akita_black_bowl_1_default_site")
+                except Exception:
+                    pass
+                try:
+                    p_site_id = sim.model.site_name2id("plate_1_default_site")
+                except Exception:
+                    pass
+
             video_frames = []
             success = False
             prev_grip = None
             closed_steps = 0
             released_after_transport = False
+            bowl_lifted = False
+            bowl_slipped = False
 
             for step in range(max_steps_per_episode):
                 # Format visual observation [H, W, 3] -> [1, 3, H, W]
@@ -435,8 +458,10 @@ def run_closed_loop_evaluation(
                 pixels = obs["pixels"]
                 img_front_np = pixels.get("image", next(iter(pixels.values())))
 
-                # Flip 180° to align with LeRobot / HuggingFace LIBERO convention (dims H and W)
-                img_front_np = np.ascontiguousarray(img_front_np[::-1, ::-1])
+                # Image Orientation: by default False (upright, exact match to LeRobot training data).
+                # If flip_image is explicitly enabled, rotate 180°.
+                if flip_image:
+                    img_front_np = np.ascontiguousarray(img_front_np[::-1, ::-1])
 
                 if record_videos and step % 2 == 0:
                     video_frames.append(img_front_np)
@@ -450,6 +475,18 @@ def run_closed_loop_evaluation(
                     "input_ids": input_ids,
                     "attention_mask": attention_mask,
                 }
+
+                # 3D spatial geometry query
+                dist_ee_bowl, dist_bowl_plate, bowl_z, ee_z = None, None, None, None
+                if sim is not None and hasattr(sim, "data"):
+                    if g_site_id is not None and g_site_id >= 0:
+                        ee_z = float(sim.data.site_xpos[g_site_id][2])
+                    if b_site_id is not None and b_site_id >= 0:
+                        bowl_z = float(sim.data.site_xpos[b_site_id][2])
+                    if g_site_id is not None and b_site_id is not None and g_site_id >= 0 and b_site_id >= 0:
+                        dist_ee_bowl = float(np.linalg.norm(sim.data.site_xpos[g_site_id] - sim.data.site_xpos[b_site_id]) * 100.0)
+                    if b_site_id is not None and p_site_id is not None and b_site_id >= 0 and p_site_id >= 0:
+                        dist_bowl_plate = float(np.linalg.norm(sim.data.site_xpos[b_site_id][:2] - sim.data.site_xpos[p_site_id][:2]) * 100.0)
 
                 # Real-time policy action query (uses 16-step chunk queue)
                 if use_amp:
@@ -479,17 +516,56 @@ def run_closed_loop_evaluation(
                     action_np[6] = -1.0
                     curr_grip = -1.0
 
-                # Monitor gripper state changes
+                # Monitor gripper state changes with rich explanatory feedback
                 curr_grip = float(action_np[6])
                 if curr_grip > 0:
                     closed_steps += 1
                 if prev_grip is None or (curr_grip > 0 and prev_grip <= 0) or (curr_grip <= 0 and prev_grip > 0):
                     grip_name = "CLOSED (+1.0)" if curr_grip > 0 else "OPEN (-1.0)"
-                    print(f"    [Step {step:3d}] Gripper state -> {grip_name}")
+                    telem = f"    [Step {step:3d}] Gripper -> {grip_name}"
+                    if curr_grip > 0:
+                        if dist_ee_bowl is not None:
+                            verdict = "🎯 Square grasp centered on bowl rim!" if dist_ee_bowl < 3.5 else f"⚠️ High/wide grasp: {dist_ee_bowl:.1f} cm from bowl center"
+                            telem += f" | Dist to Bowl: {dist_ee_bowl:.1f} cm ({verdict})"
+                        else:
+                            telem += " | Clamped by policy trigger"
+                    else:
+                        if step < min_approach_steps:
+                            telem += " | Pre-grasp guard: holding fingers wide open during descent"
+                        elif released_after_transport:
+                            plate_info = f" (Dist to Plate: {dist_bowl_plate:.1f} cm)" if dist_bowl_plate is not None else ""
+                            telem += f" | Release latch: dropping bowl over plate{plate_info}"
+                        else:
+                            telem += " | Policy requested release"
+                    print(telem)
                 prev_grip = curr_grip
+
+                # Track physical lift and slip events
+                if bowl_z is not None and not bowl_lifted and bowl_z > 0.94:
+                    bowl_lifted = True
+                    plate_str = f" | Dist to Plate: {dist_bowl_plate:.1f} cm" if dist_bowl_plate is not None else ""
+                    print(f"    [Step {step:3d}] 📦 Bowl LIFTED off table! Bowl Z: {bowl_z:.3f} m (Table: 0.898 m){plate_str}")
+
+                if bowl_lifted and not bowl_slipped and bowl_z is not None and ee_z is not None:
+                    if bowl_z < 0.91 and ee_z > 0.98:
+                        bowl_slipped = True
+                        print(f"    [Step {step:3d}] ⚠️ SLIP DETECTED: Bowl dropped back to table (Z: {bowl_z:.3f} m) while arm is at Z: {ee_z:.3f} m!")
 
                 # Step MuJoCo physics engine
                 obs, reward, terminated, truncated, info = env.step(action_np)
+
+                # Periodic robot feedback telemetry every 25 steps
+                if step > 0 and step % 25 == 0:
+                    motion_type = "Descent" if step < 30 else ("Carry/Transit" if curr_grip > 0 else "Approach/Settle")
+                    telem = f"      ↳ [Step {step:3d}] ({motion_type}):"
+                    if dist_ee_bowl is not None:
+                        telem += f" EEF->Bowl: {dist_ee_bowl:.1f}cm |"
+                    if dist_bowl_plate is not None:
+                        telem += f" Bowl->Plate: {dist_bowl_plate:.1f}cm |"
+                    if bowl_z is not None:
+                        telem += f" Bowl Z: {bowl_z:.3f}m |"
+                    telem += f" Act(dx,dy,dz): [{action_np[0]:+.2f}, {action_np[1]:+.2f}, {action_np[2]:+.2f}]"
+                    print(telem)
 
                 # Check task success across all standard LIBERO hooks
                 is_succ = False
@@ -521,7 +597,8 @@ def run_closed_loop_evaluation(
 
             if not success:
                 episode_lengths.append(max_steps_per_episode)
-                print(f"  - Episode {ep + 1}/{num_episodes_per_task}: ❌ Failed (timeout {max_steps_per_episode} steps, gripper closed: {closed_steps} steps)")
+                failure_reason = "Bowl slipped during transport" if bowl_slipped else ("Grasped empty air / missed bowl" if not bowl_lifted else "Timeout near plate")
+                print(f"  - Episode {ep + 1}/{num_episodes_per_task}: ❌ Failed ({failure_reason}, timeout {max_steps_per_episode} steps, gripper held: {closed_steps} steps)")
 
             if success:
                 task_successes += 1
@@ -605,6 +682,8 @@ def main():
                         help="Friction multiplier for gripper contact pads (default: 3.5)")
     parser.add_argument("--grasp_settle_steps", type=int, default=6,
                         help="Steps to dwell and clamp at grasp depth before lifting (default: 6)")
+    parser.add_argument("--flip_image", action="store_true", default=False,
+                        help="Whether to apply 180° rotation to camera images (default: False, upright matching dataset)")
     parser.add_argument("--output_json", type=str, default="results/closed_loop_simulation_results.json",
                         help="Path to save simulation metrics JSON")
     args = parser.parse_args()
@@ -628,6 +707,7 @@ def main():
         min_approach_steps=args.min_approach_steps,
         friction_boost=args.friction_boost,
         grasp_settle_steps=args.grasp_settle_steps,
+        flip_image=args.flip_image,
     )
 
 

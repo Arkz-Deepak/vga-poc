@@ -407,7 +407,10 @@ def run_closed_loop_evaluation(
             attention_mask = torch.ones((1, 48), dtype=torch.bool, device=device)
 
         task_successes = 0
+        task_grasps = 0
+        task_slips = 0
         episode_lengths = []
+        episodes_detail = []
 
         for ep in range(num_episodes_per_task):
             policy.reset()
@@ -640,8 +643,29 @@ def run_closed_loop_evaluation(
                 failure_reason = "Bowl slipped during transport" if bowl_slipped else ("Grasped empty air / missed bowl" if not bowl_lifted else "Timeout near plate")
                 print(f"  - Episode {ep + 1}/{num_episodes_per_task}: ❌ Failed ({failure_reason}, timeout {max_steps_per_episode} steps, gripper held: {closed_steps} steps)")
 
+            if bowl_lifted:
+                task_grasps += 1
+            if bowl_slipped:
+                task_slips += 1
+
             if success:
                 task_successes += 1
+                episodes_detail.append({
+                    "episode": ep + 1,
+                    "status": "SUCCESS",
+                    "steps": step + 1,
+                    "bowl_lifted": bowl_lifted,
+                    "bowl_slipped": bowl_slipped,
+                })
+            else:
+                episodes_detail.append({
+                    "episode": ep + 1,
+                    "status": "FAILED",
+                    "reason": failure_reason,
+                    "steps": max_steps_per_episode,
+                    "bowl_lifted": bowl_lifted,
+                    "bowl_slipped": bowl_slipped,
+                })
 
             # Save video replay of the rollout
             if record_videos and video_frames:
@@ -656,28 +680,38 @@ def run_closed_loop_evaluation(
 
         total_successes += task_successes
         task_sr = (task_successes / num_episodes_per_task) * 100.0
+        grasp_sr = (task_grasps / num_episodes_per_task) * 100.0
+        slip_sr = (task_slips / num_episodes_per_task) * 100.0
         avg_steps = float(np.mean(episode_lengths))
+        succ_steps = [e["steps"] for e in episodes_detail if e["status"] == "SUCCESS"]
+        avg_succ_steps = float(np.mean(succ_steps)) if succ_steps else None
 
         task_results[task_desc] = {
             "success_rate_pct": task_sr,
             "successes": task_successes,
             "total_episodes": num_episodes_per_task,
+            "grasp_rate_pct": grasp_sr,
+            "grasps": task_grasps,
+            "slip_rate_pct": slip_sr,
+            "slips": task_slips,
             "avg_steps_to_finish": avg_steps,
+            "avg_successful_steps": avg_succ_steps,
+            "episodes": episodes_detail,
         }
-        print(f"Task Success Rate: {task_sr:.1f}% ({task_successes}/{num_episodes_per_task}) | Avg Steps: {avg_steps:.1f}")
+        print(f"Task Metrics: Success: {task_sr:.1f}% ({task_successes}/{num_episodes_per_task}) | Grasp: {grasp_sr:.1f}% | Slip: {slip_sr:.1f}% | Avg Steps: {avg_steps:.1f}")
 
     # 5. Print Overall Summary Table
     overall_sr = (total_successes / max(1, total_rollouts)) * 100.0
-    print("\n" + "=" * 75)
-    print("      LIBERO-SPATIAL CLOSED-LOOP SIMULATION RESULTS")
-    print("=" * 75)
-    print(f"{'Task Description':<50} | {'Success Rate':<12} | {'Avg Steps':<10}")
-    print("-" * 75)
+    print("\n" + "=" * 85)
+    print("      LIBERO-SPATIAL 10-SHOT CLOSED-LOOP RESEARCH BENCHMARK RESULTS")
+    print("=" * 85)
+    print(f"{'Task Description':<44} | {'Success':<9} | {'Grasp':<8} | {'Slip':<7} | {'Avg Steps':<10}")
+    print("-" * 85)
     for t_desc, r in task_results.items():
-        print(f"{t_desc[:48]:<50} | {r['success_rate_pct']:>9.1f}% | {r['avg_steps_to_finish']:>9.1f}")
-    print("-" * 75)
-    print(f"{'OVERALL AVERAGE SUCCESS RATE':<50} | {overall_sr:>9.1f}% | {total_successes}/{total_rollouts}")
-    print("=" * 75)
+        print(f"{t_desc[:42]:<44} | {r['success_rate_pct']:>7.1f}%  | {r['grasp_rate_pct']:>6.1f}%  | {r['slip_rate_pct']:>5.1f}%  | {r['avg_steps_to_finish']:>9.1f}")
+    print("-" * 85)
+    print(f"{'OVERALL AVERAGE':<44} | {overall_sr:>7.1f}%  | {total_successes}/{total_rollouts} rollouts")
+    print("=" * 85)
 
     final_results = {
         "overall_success_rate_pct": overall_sr,

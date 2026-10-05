@@ -326,7 +326,24 @@ Closed-loop physics simulation in MuJoCo was conducted on LIBERO-Spatial Task 0:
 
 ---
 
-## How to Train and Evaluate on Kaggle Cloud GPU
+## Turn 17: 10-Shot Research Submission Benchmark & Scientific Metric Reporting
+
+- **Goal**: Rigorously configure the repository and evaluation pipeline for academic research submission (CoRL, ICRA, RSS, NeurIPS), framing the project around **few-shot sample efficiency** using strictly 10 human demonstrations per task.
+- **Key Enhancements Implemented**:
+  1. **Enriched Research Evaluation Metrics in `scripts/eval_mujoco_closed_loop.py`**:
+     Added multi-stage physical manipulation metrics:
+     - Grasp Success Rate (`grasp_rate_pct`): Measures whether the robot achieved a secure grip and lifted the object.
+     - Slip Rate (`slip_rate_pct`): Tracks whether the object was dropped during horizontal transit.
+     - Successful Steps Mean (`avg_successful_steps`): Quantifies trajectory efficiency on completed episodes.
+     - Per-Episode Detailed Manifest: Records step count, lift status, and failure reason for every rollout in `results/closed_loop_simulation_results.json`.
+  2. **Configured Turnkey Research Notebook (`notebooks/libero_vga_kaggle_turnkey.ipynb`)**:
+     Defaults strictly to `SHOTS = 10` and `checkpoints/vga_libero_10shot.pt`, with clear scientific commentary highlighting few-shot sample efficiency vs brute-force data memorization.
+  3. **Master Q&A Research Defense (`POC_QNA_CHEATSHEET.md`)**:
+     Added explicit answers to Q8 and Q9 detailing the research submission strategy, sample efficiency proofs, and core scientific claims.
+
+---
+
+## How to Train and Evaluate on Kaggle Cloud GPU (10-Shot Research Edition)
 
 To train and evaluate the pretrained VGA model on Kaggle:
 
@@ -336,13 +353,13 @@ To train and evaluate the pretrained VGA model on Kaggle:
 # 1. Pull the latest commits from main
 !cd /kaggle/working/vga-poc && git fetch origin && git reset --hard origin/main
 
-# 2. Train VGA Policy on 50 shots (or 10 shots) with official pretrained backbones
-!python /kaggle/working/vga-poc/scripts/train_vga.py --shots 50 --steps 2000 --batch_size 8 --lr 3e-4
+# 2. Train VGA Policy on strictly 10 shots with official pretrained backbones
+!python /kaggle/working/vga-poc/scripts/train_vga.py --shots 10 --steps 2000 --batch_size 8 --lr 3e-4
 
-# 3. Run closed-loop evaluation on LIBERO-Spatial Task 0
+# 3. Run closed-loop research evaluation on LIBERO-Spatial Task 0 (5 episodes)
 !python /kaggle/working/vga-poc/scripts/eval_mujoco_closed_loop.py \
-    --checkpoint /kaggle/working/vga-poc/checkpoints/vga_libero_50shot.pt \
-    --num_episodes 3 \
+    --checkpoint /kaggle/working/vga-poc/checkpoints/vga_libero_10shot.pt \
+    --num_episodes 5 \
     --max_steps 280 \
     --flip_image
 ```

@@ -155,19 +155,22 @@ class VisionLanguageEncoder(nn.Module):
         input_ids: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         camera_origin: Optional[torch.Tensor] = None,
+        image_wrist: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Encodes image observations and language into a fused context vector c in R^{B x lm_dim}.
+        Supports single-camera (front only) or dual-camera (front + wrist camera) multimodal fusion.
 
         Args:
-            image_front: Camera RGB observation [B, 3, img_size, img_size]
+            image_front: Front camera RGB observation [B, 3, img_size, img_size]
             input_ids: Language token IDs [B, seq_len]
             attention_mask: Language attention mask [B, seq_len]
             camera_origin: Optional camera position in robot base frame [B, 3]
+            image_wrist: Optional wrist camera RGB observation [B, 3, img_size, img_size]
         Returns:
             context: Contextual conditioning vector [B, lm_dim]
         """
-        # 1. Extract visual patch tokens from SigLIP
+        # 1. Extract visual patch tokens from SigLIP for front camera
         vis_outputs = self.vision_model(pixel_values=image_front)
         patch_tokens = vis_outputs.last_hidden_state  # [B, N_patches, 768]
 
@@ -179,17 +182,29 @@ class VisionLanguageEncoder(nn.Module):
             camera_origin = torch.zeros((image_front.shape[0], 3), device=image_front.device, dtype=image_front.dtype)
         grounded_vis_tokens = self.ray_rope(compressed_vis_tokens, t_base_cam=camera_origin)  # [B, 64, lm_dim]
 
+        # 3b. Optional Dual-Camera Fusion: Wrist (Eye-in-Hand) Camera
+        if image_wrist is not None:
+            vis_wrist_out = self.vision_model(pixel_values=image_wrist)
+            wrist_patch_tokens = vis_wrist_out.last_hidden_state  # [B, N_patches, 768]
+            compressed_wrist_tokens = self.projector(wrist_patch_tokens)  # [B, 64, lm_dim]
+            grounded_wrist_tokens = self.ray_rope(compressed_wrist_tokens, t_base_cam=camera_origin)
+            visual_tokens = torch.cat([grounded_vis_tokens, grounded_wrist_tokens], dim=1)  # [B, 128, lm_dim]
+            total_vis_tokens = self.num_visual_tokens * 2
+        else:
+            visual_tokens = grounded_vis_tokens
+            total_vis_tokens = self.num_visual_tokens
+
         # 4. Extract language embeddings from SmolLM2
         lang_inputs_embeds = self.language_model.embed_tokens(input_ids)  # [B, seq_len, lm_dim]
 
-        # 5. Concatenate grounded visual tokens and language tokens
-        # [B, 64 + seq_len, lm_dim]
-        multimodal_seq = torch.cat([grounded_vis_tokens, lang_inputs_embeds], dim=1)
+        # 5. Concatenate visual tokens (front + wrist) and language tokens
+        # [B, total_vis_tokens + seq_len, lm_dim]
+        multimodal_seq = torch.cat([visual_tokens, lang_inputs_embeds], dim=1)
 
         # Create combined attention mask
         batch_size = image_front.shape[0]
         device = image_front.device
-        vis_mask = torch.ones((batch_size, self.num_visual_tokens), dtype=torch.bool, device=device)
+        vis_mask = torch.ones((batch_size, total_vis_tokens), dtype=torch.bool, device=device)
         if attention_mask is not None:
             combined_mask = torch.cat([vis_mask, attention_mask.bool()], dim=1)
         else:
@@ -200,7 +215,7 @@ class VisionLanguageEncoder(nn.Module):
             inputs_embeds=multimodal_seq,
             attention_mask=combined_mask,
         )
-        fused_hidden = lm_outputs.last_hidden_state  # [B, 64 + seq_len, lm_dim]
+        fused_hidden = lm_outputs.last_hidden_state  # [B, total_vis_tokens + seq_len, lm_dim]
 
         # 7. Mean pool over the multimodal sequence to produce conditioning vector c
         # (ignoring padding tokens via the attention mask)

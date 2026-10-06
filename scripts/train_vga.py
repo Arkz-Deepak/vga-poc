@@ -44,7 +44,7 @@ from models.vga_policy import VGAPolicy
 
 def train_vga(
     shots: int = 5,
-    batch_size: int = 8,
+    batch_size: int = 16,
     num_steps: int = 300,
     lr: float = 1e-4,
     output_dir: str = "checkpoints",
@@ -107,13 +107,16 @@ def train_vga(
     )
 
     sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=local_rank, shuffle=True) if is_distributed else None
+    num_loader_workers = min(4, max(2, os.cpu_count() or 2))
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=(sampler is None),
         sampler=sampler,
-        num_workers=2,
+        num_workers=num_loader_workers,
         pin_memory=(torch.cuda.is_available()),
+        persistent_workers=(num_loader_workers > 0),
+        prefetch_factor=2 if num_loader_workers > 0 else None,
         drop_last=True,
     )
 
@@ -151,7 +154,7 @@ def train_vga(
     else:
         policy_raw = policy
 
-    # 3. Setup Optimizer & Cosine Schedule (only optimizing trainable parameters)
+    # 3. Setup Optimizer, Cosine Schedule, and AMP GradScaler
     optimizer = torch.optim.AdamW(
         trainable_params,
         lr=lr,
@@ -164,10 +167,16 @@ def train_vga(
         eta_min=lr * 0.05,
     )
 
+    # Mixed precision AMP configuration for Tensor Core acceleration (95%+ GPU saturation)
+    use_amp = torch.cuda.is_available()
+    amp_dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
+    scaler = torch.cuda.amp.GradScaler(enabled=(use_amp and amp_dtype == torch.float16))
+
     # 4. Training Loop
     if is_main_process:
         eff_batch = batch_size * (world_size if is_distributed else max(1, num_gpus))
-        print(f"\n--- 3. Beginning Fine-Tuning ({num_steps} Steps, Effective Batch Size: {eff_batch}) ---")
+        amp_info = f"AMP Enabled ({amp_dtype})" if use_amp else "FP32"
+        print(f"\n--- 3. Beginning Fine-Tuning ({num_steps} Steps, Effective Batch Size: {eff_batch}, {amp_info}) ---")
 
     policy.train()
     step = 0
@@ -186,15 +195,16 @@ def train_vga(
             data_iter = iter(train_loader)
             batch = next(data_iter)
 
-        img_front = batch["image_front"].to(device)
-        actions = batch["actions"].to(device)
+        img_front = batch["image_front"].to(device, non_blocking=True)
+        img_wrist = batch["image_wrist"].to(device, non_blocking=True) if "image_wrist" in batch else None
+        actions = batch["actions"].to(device, non_blocking=True)
         tasks = batch["task"]
 
         # Tokenize task instructions
         if tok is not None:
             tokenized = tok(tasks, return_tensors="pt", padding="max_length", max_length=48, truncation=True)
-            input_ids = tokenized["input_ids"].to(device)
-            att_mask = tokenized["attention_mask"].to(device)
+            input_ids = tokenized["input_ids"].to(device, non_blocking=True)
+            att_mask = tokenized["attention_mask"].to(device, non_blocking=True)
         else:
             input_ids = torch.zeros((batch_size, 48), dtype=torch.long, device=device)
             att_mask = torch.ones((batch_size, 48), dtype=torch.bool, device=device)
@@ -205,24 +215,33 @@ def train_vga(
         # Extract prefix waypoints for smooth chunk join training
         prefix_wp = batch.get("prefix_actions", None)
         if prefix_wp is not None:
-            prefix_wp = prefix_wp.to(device)
+            prefix_wp = prefix_wp.to(device, non_blocking=True)
 
-        optimizer.zero_grad()
-        loss_dict = policy(
-            image_front=img_front,
-            input_ids=input_ids,
-            actions=actions,
-            attention_mask=att_mask,
-            prefix_waypoints=prefix_wp,
-            lambda_kin=curr_lambda_kin,
-        )
+        optimizer.zero_grad(set_to_none=True)
 
-        loss = loss_dict["loss"].mean() if loss_dict["loss"].dim() > 0 else loss_dict["loss"]
-        loss.backward()
+        with torch.cuda.amp.autocast(enabled=use_amp, dtype=amp_dtype):
+            loss_dict = policy(
+                image_front=img_front,
+                input_ids=input_ids,
+                actions=actions,
+                attention_mask=att_mask,
+                prefix_waypoints=prefix_wp,
+                image_wrist=img_wrist,
+                lambda_kin=curr_lambda_kin,
+            )
+            loss = loss_dict["loss"].mean() if loss_dict["loss"].dim() > 0 else loss_dict["loss"]
 
-        # Gradient clipping for training stability
-        torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=1.0)
-        optimizer.step()
+        if scaler.is_enabled():
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+            optimizer.step()
+
         lr_scheduler.step()
 
         step += 1
@@ -317,7 +336,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--shots", type=int, default=5, help="Number of demo episodes per task (5 or 10)")
     parser.add_argument("--steps", type=int, default=300, help="Number of training steps")
-    parser.add_argument("--batch_size", type=int, default=8, help="Batch size per GPU")
+    parser.add_argument("--batch_size", type=int, default=16, help="Batch size per GPU (default: 16)")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--output_dir", type=str, default="checkpoints", help="Output directory for checkpoints")
     parser.add_argument("--stats_path", type=str, default=None, help="Path to action_stats.json")

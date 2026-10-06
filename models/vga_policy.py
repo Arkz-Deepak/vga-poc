@@ -156,6 +156,7 @@ class VGAPolicy(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         camera_origin: Optional[torch.Tensor] = None,
         prefix_waypoints: Optional[torch.Tensor] = None,
+        image_wrist: Optional[torch.Tensor] = None,
         lambda_kin: float = 0.05,
     ) -> Dict[str, torch.Tensor]:
         """
@@ -168,6 +169,7 @@ class VGAPolicy(nn.Module):
             attention_mask: Optional language attention mask [B, seq_len]
             camera_origin: Optional camera position in robot base frame [B, 3]
             prefix_waypoints: Optional P=4 tail waypoints from previous chunk [B, 4, 7]
+            image_wrist: Optional wrist camera observation [B, 3, 256, 256]
             lambda_kin: Kinematic loss scaling weight
         Returns:
             Dictionary containing total_loss, flow_loss, acc_loss, jerk_loss
@@ -175,12 +177,13 @@ class VGAPolicy(nn.Module):
         batch_size = actions.shape[0]
         device = actions.device
 
-        # 1. Encode visual and language inputs into context c in R^{B x lm_dim}
+        # 1. Encode visual (front + optional wrist) and language inputs into context c in R^{B x lm_dim}
         context = self.encoder(
             image_front=image_front,
             input_ids=input_ids,
             attention_mask=attention_mask,
             camera_origin=camera_origin,
+            image_wrist=image_wrist,
         )
 
         # 2. Continuous-Time Flow Matching Setup
@@ -241,6 +244,7 @@ class VGAPolicy(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         camera_origin: Optional[torch.Tensor] = None,
         prefix_waypoints: Optional[torch.Tensor] = None,
+        image_wrist: Optional[torch.Tensor] = None,
         apply_schmitt: bool = True,
     ) -> torch.Tensor:
         """
@@ -252,18 +256,22 @@ class VGAPolicy(nn.Module):
             attention_mask: Optional language attention mask [B, seq_len]
             camera_origin: Optional camera position in robot base frame [B, 3]
             prefix_waypoints: Optional P=4 tail waypoints from previous chunk [B, 4, 7]
+            image_wrist: Optional wrist camera observation [B, 3, 256, 256]
             apply_schmitt: Whether to apply Schmitt trigger hysteresis to gripper
         Returns:
             chunk_phys: Unnormalized physical action trajectories [B, 16, 7]
         """
         if image_front.dtype == torch.uint8:
             image_front = (image_front.float() / 255.0) * 2.0 - 1.0
+        if image_wrist is not None and image_wrist.dtype == torch.uint8:
+            image_wrist = (image_wrist.float() / 255.0) * 2.0 - 1.0
 
         context = self.encoder(
             image_front=image_front,
             input_ids=input_ids,
             attention_mask=attention_mask,
             camera_origin=camera_origin,
+            image_wrist=image_wrist,
         )
 
         chunk_norm = self.expert.sample_actions(
@@ -313,6 +321,7 @@ class VGAPolicy(nn.Module):
         # 1. If queue is empty, compute a new 16-step action chunk
         if len(self.action_queue) == 0:
             image_front = batch.get("image_front", batch.get("observation.images.camera1"))
+            image_wrist = batch.get("image_wrist", batch.get("observation.images.wrist_image", batch.get("observation.images.camera2", None)))
             input_ids = batch.get("input_ids", batch.get("observation.language.tokens"))
             attention_mask = batch.get("attention_mask", batch.get("observation.language.attention_mask"))
             camera_origin = batch.get("camera_origin", None)
@@ -320,6 +329,8 @@ class VGAPolicy(nn.Module):
             # Ensure image is float in [-1, 1]
             if image_front.dtype == torch.uint8:
                 image_front = (image_front.float() / 255.0) * 2.0 - 1.0
+            if image_wrist is not None and image_wrist.dtype == torch.uint8:
+                image_wrist = (image_wrist.float() / 255.0) * 2.0 - 1.0
 
             # Encode context
             context = self.encoder(
@@ -327,6 +338,7 @@ class VGAPolicy(nn.Module):
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 camera_origin=camera_origin,
+                image_wrist=image_wrist,
             )
 
             # Generate 16-step action chunk via 4-step Euler ODE integration

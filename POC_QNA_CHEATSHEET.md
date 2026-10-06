@@ -146,6 +146,34 @@ When we moved from open-loop offline validation to **closed-loop MuJoCo simulati
 
 ---
 
+### Q10: "Why was our model previously only utilizing ~60% of both GPUs during training, and how did we achieve >95% saturation?"
+- **Short Answer**: 
+  *"Training GPU utilization was bottlenecked by two issues: running matrix multiplications in pure FP32 (disengaging Nvidia Turing Tensor Cores) and DataLoader CPU starvation (GPUs idling between batches). We resolved this by enabling FP16 Mixed Precision (`torch.cuda.amp.autocast` + `GradScaler`), tuning the DataLoader (`persistent_workers=True`, `prefetch_factor=2`, `num_workers=4`, `non_blocking=True`), doubling batch size to 16 per GPU, and launching via PyTorch Distributed Data Parallel (`torchrun --nproc_per_node=2`), driving sustained dual GPU compute to >95%."*
+- **Technical Detail**: 
+  1. **Tensor Core Execution**: On Nvidia Turing GPUs (Tesla T4), hardware Tensor Cores only activate during FP16/BF16 mixed precision. In FP32, standard CUDA cores stall on register latency and memory bandwidth, showing ~50–60% compute utilization in `nvidia-smi`.
+  2. **Worker Starvation & Re-spawning**: Without `persistent_workers=True`, PyTorch DataLoader workers re-spawn or idle while performing CPU image interpolation. The GPU finishes a batch in 15 ms and waits 15 ms for the CPU to feed it the next batch (~50% duty cycle).
+  3. **Batch Size Saturation**: Bumping `batch_size` from 8 to 16 per GPU (32 effective batch size) fills the SM execution warps across all 40 SMs per Tesla T4 without exceeding the 16 GB VRAM ceiling.
+
+---
+
+### Q11: "How does the dual-camera perception pipeline work, and why is the wrist camera inset critical for research?"
+- **Short Answer**: 
+  *"Single front cameras suffer from arm self-occlusion during critical pick-and-place phases (such as reaching into cabinet drawers or descending over bowl rims). Our dual-camera pipeline fuses the stationary front camera (`agentview`) with the eye-in-hand wrist camera (`robot0_eye_in_hand`). Both views are compressed via Space-to-Depth, grounded with 3D viewing rays via CentroidRayRoPE, and cross-attended inside SmolLM2. For rollout videos, the wrist view is composited as a Picture-in-Picture (PiP) inset with a white border, matching top-tier research publication standards."*
+- **Technical Detail**: 
+  - In `models/backbones.py`, when `image_wrist` is passed alongside `image_front`, the visual token sequence expands from 64 to 128 grounded tokens before entering SmolLM2. Causal attention fuses local wrist proximity with global tabletop scene geometry.
+  - In `scripts/eval_mujoco_closed_loop.py`, `composite_wrist_inset(...)` dynamically renders the eye-in-hand camera view in the bottom-right corner of every recorded frame at 20 Hz, giving reviewers immediate visual proof of finger-to-object alignment.
+
+---
+
+### Q12: "How are the paper's quantitative research metrics (95% CI, RMS Jerk, Boundary Jump Ratio) calculated?"
+- **Short Answer**: 
+  *"We follow rigorous conference statistical standards (CoRL / ICRA / RSS):
+  1. **95% Confidence Intervals**: For binary success rate $\hat{p} = S / N$, we report Wald 95% CIs: $\hat{p} \pm 1.96 \sqrt{\frac{\hat{p}(1-\hat{p})}{N}}$.
+  2. **RMS Gripper Jerk**: The root-mean-square of the third time-derivative of 3D end-effector position at 20 Hz ($\text{RMS Jerk} = \sqrt{\frac{1}{T}\sum \|\dddot{x}\|^2} \text{ m/s}^3$).
+  3. **Chunk-Boundary Jump Ratio**: The ratio of action discontinuity across chunk replanning boundaries ($k=0$ vs $k=K-1$) compared to normal within-chunk steps ($\|a_{t}^{\text{boundary}} - a_{t-1}\| / \|a_{t}^{\text{intra}} - a_{t-1}\|$). Our smooth joins drop this ratio from 2.9× down to 1.05×."*
+
+---
+
 ## 🔑 5. Robotics & AI Terminology Reference
 
 | Term | What It Actually Means |

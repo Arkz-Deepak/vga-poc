@@ -265,35 +265,31 @@ def boost_gripper_friction(env, friction_val: float = 3.5) -> int:
 def composite_wrist_inset(
     front_img: np.ndarray,
     wrist_img: Optional[np.ndarray],
-    scale: float = 0.32,
-    margin: int = 8,
+    scale: float = 0.29,
+    margin: int = 10,
     border_color: Tuple[int, int, int] = (255, 255, 255),
     border_width: int = 2,
 ) -> np.ndarray:
     """
     Overlays the wrist (eye-in-hand) camera view as an inset in the bottom-right corner
-    of the front camera image, matching the visual layout of VGA research rollout videos.
+    of the front camera image with a clean 2px white border, matching official VGA benchmark videos.
     """
     if wrist_img is None or cv2 is None:
         return front_img
 
     H, W, C = front_img.shape
-    inset_w = int(W * scale)
-    inset_h = int(H * scale)
+    inset_size = int(W * scale)
 
-    # Resize wrist view
-    wrist_resized = cv2.resize(wrist_img, (inset_w, inset_h), interpolation=cv2.INTER_AREA)
+    wrist_resized = cv2.resize(wrist_img, (inset_size, inset_size), interpolation=cv2.INTER_AREA)
     composite = front_img.copy()
 
-    # Bottom-right placement coordinates
     x2 = W - margin
-    x1 = x2 - inset_w
+    x1 = x2 - inset_size
     y2 = H - margin
-    y1 = y2 - inset_h
+    y1 = y2 - inset_size
 
     if x1 >= 0 and y1 >= 0 and x2 <= W and y2 <= H:
         composite[y1:y2, x1:x2] = wrist_resized
-        # Draw clean white border around inset
         cv2.rectangle(
             composite,
             (x1 - border_width, y1 - border_width),
@@ -301,16 +297,91 @@ def composite_wrist_inset(
             border_color,
             border_width,
         )
-        # Small badge label "Wrist Cam" in top-left of inset
-        badge_text = "Wrist Cam"
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.32
-        thickness = 1
-        (tw, th), _ = cv2.getTextSize(badge_text, font, font_scale, thickness)
-        cv2.rectangle(composite, (x1 + 2, y1 + 2), (x1 + tw + 6, y1 + th + 6), (0, 0, 0), -1)
-        cv2.putText(composite, badge_text, (x1 + 4, y1 + th + 4), font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
 
     return composite
+
+
+def render_research_frame(
+    front_img: np.ndarray,
+    wrist_img: Optional[np.ndarray],
+    task_desc: str,
+    task_id: int,
+    ep_idx: int,
+    shots: int = 10,
+    model_name: str = "VGA (10-shot Policy)",
+    success_step: Optional[int] = None,
+    target_width: int = 480,
+) -> np.ndarray:
+    """
+    Renders an academic conference-quality frame matching the official VGA benchmark layout:
+      - Dark top header (#0d0f0f) with task instruction and benchmark subtitle
+      - Panel subheader (#171919) with model name
+      - Main camera view with crisp white-bordered wrist camera inset (bottom-right)
+      - Solid green (#1a7844) SUCCESS banner across viewport when completed
+    """
+    if cv2 is None:
+        return front_img
+
+    H_front, W_front, _ = front_img.shape
+    scale = target_width / max(1, W_front)
+    H_target = int(H_front * scale)
+    W_target = target_width
+
+    front_resized = cv2.resize(front_img, (W_target, H_target), interpolation=cv2.INTER_AREA)
+
+    header_h = 58
+    panel_h = 26
+    total_h = header_h + panel_h + H_target
+    total_w = W_target
+
+    canvas = np.zeros((total_h, total_w, 3), dtype=np.uint8)
+
+    # 1. Dark charcoal header (#0d0f0f)
+    canvas[:header_h, :] = (13, 15, 15)
+    # 2. Sub-header bar (#171919)
+    canvas[header_h:header_h + panel_h, :] = (23, 25, 25)
+    # 3. Main camera view
+    canvas[header_h + panel_h:, :] = front_resized
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    clean_desc = task_desc.strip()
+    if clean_desc.endswith("."):
+        clean_desc = clean_desc[:-1]
+    cv2.putText(canvas, clean_desc.lower(), (12, 26), font, 0.44, (255, 255, 255), 1, cv2.LINE_AA)
+
+    sub_meta = f"LIBERO-Spatial task {task_id}, start state {ep_idx} · {shots} demos/task · real time (20 Hz) · inset: wrist camera"
+    cv2.putText(canvas, sub_meta, (12, 48), font, 0.36, (175, 180, 180), 1, cv2.LINE_AA)
+
+    cv2.putText(canvas, model_name, (12, header_h + 18), font, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
+
+    # 4. Wrist Camera Inset in Bottom-Right
+    if wrist_img is not None:
+        inset_size = int(W_target * 0.29)
+        wrist_resized = cv2.resize(wrist_img, (inset_size, inset_size), interpolation=cv2.INTER_AREA)
+        margin_r = 10
+        margin_b = 10
+        x2 = total_w - margin_r
+        x1 = x2 - inset_size
+        y2 = total_h - margin_b
+        y1 = y2 - inset_size
+
+        if x1 >= 0 and y1 >= 0 and x2 <= total_w and y2 <= total_h:
+            canvas[y1:y2, x1:x2] = wrist_resized
+            cv2.rectangle(canvas, (x1 - 2, y1 - 2), (x2 + 1, y2 + 1), (255, 255, 255), 2)
+
+    # 5. Green SUCCESS Banner
+    if success_step is not None:
+        banner_h = 36
+        banner_y1 = header_h + panel_h + int(H_target * 0.38)
+        banner_y2 = banner_y1 + banner_h
+        canvas[banner_y1:banner_y2, :] = (26, 120, 68)
+        succ_text = f"SUCCESS  step {success_step}"
+        (tw, th), _ = cv2.getTextSize(succ_text, font, 0.65, 2)
+        tx = (total_w - tw) // 2
+        ty = banner_y1 + (banner_h + th) // 2 - 1
+        cv2.putText(canvas, succ_text, (tx, ty), font, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
+
+    return canvas
 
 
 def compute_rms_jerk(trajectory: List[np.ndarray], dt: float = 0.05) -> float:
@@ -612,8 +683,18 @@ def run_closed_loop_evaluation(
                     if img_wrist_np is not None:
                         img_wrist_np = np.ascontiguousarray(img_wrist_np[::-1, ::-1])
 
-                if record_videos and step % 2 == 0:
-                    comp_frame = composite_wrist_inset(img_front_np, img_wrist_np)
+                if record_videos:
+                    comp_frame = render_research_frame(
+                        front_img=img_front_np,
+                        wrist_img=img_wrist_np,
+                        task_desc=task_desc,
+                        task_id=task_id,
+                        ep_idx=ep,
+                        shots=10,
+                        model_name="VGA (10-shot Policy)",
+                        success_step=None,
+                        target_width=480,
+                    )
                     video_frames.append(comp_frame)
 
                 # Convert to PyTorch float tensor in [-1, 1]
@@ -874,6 +955,20 @@ def run_closed_loop_evaluation(
                     success = True
                     episode_lengths.append(step + 1)
                     print(f"  - Episode {ep + 1}/{num_episodes_per_task}: ✅ SUCCESS at step {step + 1}!")
+                    if record_videos:
+                        succ_frame = render_research_frame(
+                            front_img=img_front_np,
+                            wrist_img=img_wrist_np,
+                            task_desc=task_desc,
+                            task_id=task_id,
+                            ep_idx=ep,
+                            shots=10,
+                            model_name="VGA (10-shot Policy)",
+                            success_step=step + 1,
+                            target_width=480,
+                        )
+                        for _ in range(25):  # 1.25s hold banner at 20 Hz
+                            video_frames.append(succ_frame)
                     break
 
                 if terminated or truncated:

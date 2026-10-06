@@ -82,6 +82,94 @@ def composite_wrist_inset(
     return frame
 
 
+def render_research_frame(
+    front_img: np.ndarray,
+    wrist_img: Optional[np.ndarray],
+    task_desc: str,
+    task_id: int,
+    ep_idx: int,
+    shots: int = 10,
+    model_name: str = "SmolVLA-450M Baseline",
+    success_step: Optional[int] = None,
+    target_width: int = 480,
+) -> np.ndarray:
+    """
+    Renders an academic conference-quality frame matching the official benchmark layout:
+      - Dark top header (#0d0f0f) with task instruction and benchmark subtitle
+      - Panel subheader (#171919) with model name
+      - Main camera view with crisp white-bordered wrist camera inset (bottom-right)
+      - Solid green (#1a7844) SUCCESS banner across viewport when completed
+    """
+    try:
+        import cv2
+    except ImportError:
+        cv2 = None
+
+    if cv2 is None:
+        return composite_wrist_inset(front_img, wrist_img)
+
+    H_front, W_front, _ = front_img.shape
+    scale = target_width / max(1, W_front)
+    H_target = int(H_front * scale)
+    W_target = target_width
+
+    front_resized = cv2.resize(front_img, (W_target, H_target), interpolation=cv2.INTER_AREA)
+
+    header_h = 58
+    panel_h = 26
+    total_h = header_h + panel_h + H_target
+    total_w = W_target
+
+    canvas = np.zeros((total_h, total_w, 3), dtype=np.uint8)
+
+    # 1. Dark charcoal header (#0d0f0f)
+    canvas[:header_h, :] = (13, 15, 15)
+    # 2. Sub-header bar (#171919)
+    canvas[header_h:header_h + panel_h, :] = (23, 25, 25)
+    # 3. Main camera view
+    canvas[header_h + panel_h:, :] = front_resized
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    clean_desc = task_desc.strip()
+    if clean_desc.endswith("."):
+        clean_desc = clean_desc[:-1]
+    cv2.putText(canvas, clean_desc.lower(), (12, 26), font, 0.44, (255, 255, 255), 1, cv2.LINE_AA)
+
+    sub_meta = f"LIBERO-Spatial task {task_id}, start state {ep_idx} · {shots} demos/task · real time (20 Hz) · inset: wrist camera"
+    cv2.putText(canvas, sub_meta, (12, 48), font, 0.36, (175, 180, 180), 1, cv2.LINE_AA)
+
+    cv2.putText(canvas, model_name, (12, header_h + 18), font, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
+
+    # 4. Wrist Camera Inset in Bottom-Right
+    if wrist_img is not None:
+        inset_size = int(W_target * 0.29)
+        wrist_resized = cv2.resize(wrist_img, (inset_size, inset_size), interpolation=cv2.INTER_AREA)
+        margin_r = 10
+        margin_b = 10
+        x2 = total_w - margin_r
+        x1 = x2 - inset_size
+        y2 = total_h - margin_b
+        y1 = y2 - inset_size
+
+        if x1 >= 0 and y1 >= 0 and x2 <= total_w and y2 <= total_h:
+            canvas[y1:y2, x1:x2] = wrist_resized
+            cv2.rectangle(canvas, (x1 - 2, y1 - 2), (x2 + 1, y2 + 1), (255, 255, 255), 2)
+
+    # 5. Green SUCCESS Banner
+    if success_step is not None:
+        banner_h = 36
+        banner_y1 = header_h + panel_h + int(H_target * 0.38)
+        banner_y2 = banner_y1 + banner_h
+        canvas[banner_y1:banner_y2, :] = (26, 120, 68)
+        succ_text = f"SUCCESS  step {success_step}"
+        (tw, th), _ = cv2.getTextSize(succ_text, font, 0.65, 2)
+        tx = (total_w - tw) // 2
+        ty = banner_y1 + (banner_h + th) // 2 - 1
+        cv2.putText(canvas, succ_text, (tx, ty), font, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
+
+    return canvas
+
+
 def compute_rms_jerk(trajectory: List[np.ndarray], dt: float = 0.05) -> float:
     """Computes Root-Mean-Square (RMS) jerk ||d³x/dt³|| over end-effector trajectory."""
     if len(trajectory) < 4:
@@ -317,8 +405,18 @@ def run_smolvla_evaluation(
                     if img_wrist_np is not None:
                         img_wrist_np = np.rot90(img_wrist_np, 2).copy()
 
-                if record_videos and step % 2 == 0:
-                    comp_frame = composite_wrist_inset(img_front_np, img_wrist_np)
+                if record_videos:
+                    comp_frame = render_research_frame(
+                        front_img=img_front_np,
+                        wrist_img=img_wrist_np,
+                        task_desc=task_lang,
+                        task_id=task_id,
+                        ep_idx=ep,
+                        shots=10,
+                        model_name="SmolVLA-450M Baseline",
+                        success_step=None,
+                        target_width=480,
+                    )
                     video_frames.append(comp_frame)
 
                 # Format images for SmolVLA: [1, 3, 256, 256] in float [0, 1]
@@ -430,6 +528,20 @@ def run_smolvla_evaluation(
                 if is_succ:
                     success = True
                     print(f"  - Episode {ep + 1}/{num_episodes_per_task}: ✅ SUCCESS at step {step + 1}!")
+                    if record_videos:
+                        succ_frame = render_research_frame(
+                            front_img=img_front_np,
+                            wrist_img=img_wrist_np,
+                            task_desc=task_lang,
+                            task_id=task_id,
+                            ep_idx=ep,
+                            shots=10,
+                            model_name="SmolVLA-450M Baseline",
+                            success_step=step + 1,
+                            target_width=480,
+                        )
+                        for _ in range(25):  # 1.25s hold banner at 20 Hz
+                            video_frames.append(succ_frame)
                     break
 
                 if terminated or truncated:

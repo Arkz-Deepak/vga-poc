@@ -39,6 +39,7 @@ class SchmittTriggerGripper:
     ):
         self.low_thresh = low_thresh
         self.high_thresh = high_thresh
+        self.initial_min_hold_steps = min_hold_steps
         self.min_hold_steps = min_hold_steps
         self.open_val = float(open_val)
         self.close_val = float(close_val)
@@ -46,9 +47,10 @@ class SchmittTriggerGripper:
         self.steps_in_state = 0
 
     def reset(self, initial_state: float = None):
-        """Resets the internal latch state."""
+        """Resets the internal latch state and restores min_hold_steps."""
         self.current_state = float(initial_state if initial_state is not None else self.open_val)
         self.steps_in_state = 0
+        self.min_hold_steps = self.initial_min_hold_steps
 
     def step(self, raw_gripper_action: Union[float, torch.Tensor]) -> float:
         """

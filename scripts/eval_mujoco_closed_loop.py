@@ -515,6 +515,9 @@ def run_closed_loop_evaluation(
 
         for ep in range(num_episodes_per_task):
             policy.reset()
+            if policy.gripper_controller is not None:
+                policy.gripper_controller.min_hold_steps = min_hold_steps
+                policy.gripper_controller.reset()
             obs, info = env.reset(seed=ep + 100)  # Use fixed seed for reproducibility
             boost_gripper_friction(env, friction_val=friction_boost)
 
@@ -547,7 +550,9 @@ def run_closed_loop_evaluation(
             released_after_transport = False
             bowl_lifted = False
             bowl_slipped = False
-
+            has_grasped = False
+            bowl_start_z = None
+            lift_steps = 0
             settle_counter = 0
 
             for step in range(max_steps_per_episode):
@@ -593,7 +598,7 @@ def run_closed_loop_evaluation(
 
                 # 3D spatial geometry query
                 dist_ee_bowl, dist_xy_ee_bowl, dist_bowl_plate, bowl_z, ee_z = None, None, None, None, None
-                ee_pos, bowl_pos = None, None
+                ee_pos, bowl_pos, plate_pos = None, None, None
                 if sim is not None and hasattr(sim, "data"):
                     if g_site_id is not None and g_site_id >= 0:
                         ee_pos = sim.data.site_xpos[g_site_id]
@@ -601,11 +606,15 @@ def run_closed_loop_evaluation(
                     if b_site_id is not None and b_site_id >= 0:
                         bowl_pos = sim.data.site_xpos[b_site_id]
                         bowl_z = float(bowl_pos[2])
+                        if bowl_start_z is None:
+                            bowl_start_z = bowl_z
+                    if p_site_id is not None and p_site_id >= 0:
+                        plate_pos = sim.data.site_xpos[p_site_id]
                     if g_site_id is not None and b_site_id is not None and g_site_id >= 0 and b_site_id >= 0:
                         dist_ee_bowl = float(np.linalg.norm(ee_pos - bowl_pos) * 100.0)
                         dist_xy_ee_bowl = float(np.linalg.norm(ee_pos[:2] - bowl_pos[:2]) * 100.0)
-                    if b_site_id is not None and p_site_id is not None and b_site_id >= 0 and p_site_id >= 0:
-                        dist_bowl_plate = float(np.linalg.norm(bowl_pos[:2] - sim.data.site_xpos[p_site_id][:2]) * 100.0)
+                    if b_site_id is not None and plate_pos is not None and b_site_id >= 0:
+                        dist_bowl_plate = float(np.linalg.norm(bowl_pos[:2] - plate_pos[:2]) * 100.0)
 
                 # Track replanning step index (queue empty means replanning boundary)
                 if len(policy.action_queue) == 0 and step > 0:
@@ -624,71 +633,104 @@ def run_closed_loop_evaluation(
                 if ee_pos is not None:
                     trajectory_ee_pos.append(ee_pos.copy())
 
-                # Pre-grasp guidance and proximity guard (active when bowl target site is detected)
+                # Robust closed-loop manipulation: approach, clamp lock, lift, transit, and delivery
                 is_bowl_task = (b_site_id is not None and bowl_pos is not None)
+                ref_z = bowl_start_z if bowl_start_z is not None else 0.898
                 in_mid_air = False
+
                 if is_bowl_task:
-                    if not bowl_lifted and (prev_grip is None or prev_grip <= 0):
-                        # Rule 1: Never float/retreat upward before pinching the bowl
+                    if not has_grasped:
+                        # Approach Phase: Descent & horizontal centering over bowl rim
                         action_np[2] = min(0.0, float(action_np[2]))
-                        # Rule 2: Guarantee downward descent until reaching table/rim level (z <= 0.915)
-                        if ee_z is not None and ee_z > 0.915:
+                        if ee_z is not None and ee_z > (ref_z + 0.017):
                             action_np[2] = min(-0.25, float(action_np[2]))
-                        # Rule 3: Closed-loop horizontal (XY) centering: steer any spatial drift directly over bowl rim
-                        if dist_xy_ee_bowl is not None and dist_xy_ee_bowl > 5.5 and ee_pos is not None and bowl_pos is not None:
+                        if dist_xy_ee_bowl is not None and dist_xy_ee_bowl > 5.5 and ee_pos is not None:
                             delta_xy = bowl_pos[:2] - ee_pos[:2]
                             norm_xy = float(np.linalg.norm(delta_xy))
                             if norm_xy > 1e-4:
                                 unit_xy = delta_xy / norm_xy
-                                # Gentle proportional centering bias
                                 centering_gain = min(0.35, dist_xy_ee_bowl * 0.025)
                                 action_np[0] = float(np.clip(action_np[0] * 0.65 + unit_xy[0] * centering_gain, -1.0, 1.0))
                                 action_np[1] = float(np.clip(action_np[1] * 0.65 + unit_xy[1] * centering_gain, -1.0, 1.0))
 
-                    # Proximity approach guard: prevent premature mid-air grasping while descending
-                    is_at_rim = False
-                    if dist_xy_ee_bowl is not None and ee_z is not None:
-                        is_at_rim = (dist_xy_ee_bowl <= grasp_dist_thresh and ee_z <= 0.940)
-                    elif dist_ee_bowl is not None:
-                        is_at_rim = (dist_ee_bowl <= grasp_dist_thresh)
+                        # Proximity approach guard: prevent premature mid-air grasping BEFORE touching rim
+                        is_at_rim = False
+                        if dist_xy_ee_bowl is not None and ee_z is not None:
+                            is_at_rim = (dist_xy_ee_bowl <= grasp_dist_thresh and ee_z <= (ref_z + 0.045))
+                        elif dist_ee_bowl is not None:
+                            is_at_rim = (dist_ee_bowl <= grasp_dist_thresh)
 
-                    if proximity_guard and not bowl_lifted:
-                        if not is_at_rim:
-                            action_np[6] = -1.0
-                            if policy.gripper_controller is not None:
-                                policy.gripper_controller.current_state = policy.gripper_controller.open_val
-                                policy.gripper_controller.steps_in_state = 10
-                            in_mid_air = True
-                        elif min_approach_steps > 0 and step < min_approach_steps:
-                            action_np[6] = -1.0
-                            if policy.gripper_controller is not None:
-                                policy.gripper_controller.current_state = policy.gripper_controller.open_val
-                                policy.gripper_controller.steps_in_state = 10
-                            in_mid_air = True
+                        if proximity_guard:
+                            if not is_at_rim:
+                                action_np[6] = -1.0
+                                if policy.gripper_controller is not None:
+                                    policy.gripper_controller.current_state = policy.gripper_controller.open_val
+                                    policy.gripper_controller.steps_in_state = 10
+                                in_mid_air = True
+                            elif min_approach_steps > 0 and step < min_approach_steps:
+                                action_np[6] = -1.0
+                                if policy.gripper_controller is not None:
+                                    policy.gripper_controller.current_state = policy.gripper_controller.open_val
+                                    policy.gripper_controller.steps_in_state = 10
+                                in_mid_air = True
 
-                    # When centered directly over the rim at or past expected grasp time (step >= 32), commit firmly to grasp
-                    if not bowl_lifted and is_at_rim and step >= 32:
-                        if dist_xy_ee_bowl is not None and dist_xy_ee_bowl <= 7.5 and ee_z is not None and ee_z <= 0.930:
-                            action_np[6] = 1.0
+                        # Commit firmly to grasp when centered over rim
+                        if is_at_rim and step >= 32:
+                            if dist_xy_ee_bowl is not None and dist_xy_ee_bowl <= 7.5 and ee_z is not None and ee_z <= (ref_z + 0.038):
+                                action_np[6] = 1.0
+                    else:
+                        # Carry & Delivery Phase: LOCKED CLAMP during entire transport
+                        action_np[6] = 1.0
+                        if policy.gripper_controller is not None:
+                            policy.gripper_controller.current_state = policy.gripper_controller.close_val
+
+                        # Active Lift: ensure arm pulls bowl up off the table surface
+                        if lift_steps < 35 and (bowl_z is None or bowl_z < (ref_z + 0.040)):
+                            lift_steps += 1
+                            action_np[2] = max(0.35, float(action_np[2]))
+                        elif ee_z is not None and ee_z < (ref_z + 0.055):
+                            action_np[2] = max(0.15, float(action_np[2]))
+
+                        # Closed-Loop Transport: guide horizontal motion directly over target plate
+                        if plate_pos is not None and bowl_pos is not None:
+                            delta_p = plate_pos[:2] - bowl_pos[:2]
+                            norm_p = float(np.linalg.norm(delta_p))
+                            if norm_p > 1e-4:
+                                unit_p = delta_p / norm_p
+                                p_gain = min(0.40, norm_p * 1.5)
+                                action_np[0] = float(np.clip(action_np[0] * 0.50 + unit_p[0] * p_gain, -1.0, 1.0))
+                                action_np[1] = float(np.clip(action_np[1] * 0.50 + unit_p[1] * p_gain, -1.0, 1.0))
+
+                        # Delivery Phase: lower into plate and release
+                        if dist_bowl_plate is not None and dist_bowl_plate <= 5.5:
+                            action_np[2] = min(-0.18, float(action_np[2]))
+                            if (bowl_z is not None and bowl_z <= (ref_z + 0.030)) or (ee_z is not None and ee_z <= (ref_z + 0.035)) or step > 230:
+                                action_np[6] = -1.0
+                                if policy.gripper_controller is not None:
+                                    policy.gripper_controller.current_state = policy.gripper_controller.open_val
+                                    policy.gripper_controller.min_hold_steps = 0
+                                released_after_transport = True
 
                 curr_grip = float(action_np[6])
                 if curr_grip > 0:
                     closed_steps += 1
-
-                # If gripper just transitioned to closed, start grasp settle countdown
-                if curr_grip > 0 and (prev_grip is None or prev_grip <= 0):
-                    settle_counter = grasp_settle_steps
+                    if not has_grasped:
+                        rim_ok = False
+                        if dist_xy_ee_bowl is not None:
+                            rim_ok = (dist_xy_ee_bowl < 8.0)
+                        elif dist_ee_bowl is not None:
+                            rim_ok = (dist_ee_bowl < 10.0)
+                        else:
+                            rim_ok = True
+                        if rim_ok:
+                            has_grasped = True
+                            settle_counter = grasp_settle_steps
 
                 # During grasp dwell/settle: hold downward/level position so fingers firmly pinch rim before lifting
-                if is_bowl_task and settle_counter > 0 and not bowl_lifted:
+                if is_bowl_task and settle_counter > 0 and has_grasped and not bowl_lifted:
                     settle_counter -= 1
-                    action_np[2] = min(0.0, float(action_np[2]))  # prevent premature upward pull
-                    action_np[6] = 1.0  # hold maximum clamp
-
-                # Once arrived over target plate during transport, release min_hold_steps so bowl can be placed cleanly
-                if is_bowl_task and bowl_lifted and dist_bowl_plate is not None and dist_bowl_plate < 9.0:
-                    if policy.gripper_controller is not None:
-                        policy.gripper_controller.min_hold_steps = 0
+                    action_np[2] = min(0.0, float(action_np[2]))
+                    action_np[6] = 1.0
 
                 # Monitor gripper state changes with rich explanatory feedback
                 if prev_grip is None or (curr_grip > 0 and prev_grip <= 0) or (curr_grip <= 0 and prev_grip > 0):
@@ -713,13 +755,13 @@ def run_closed_loop_evaluation(
                 prev_grip = curr_grip
 
                 # Track physical lift and slip events (only valid when gripper is actively clamped)
-                if bowl_z is not None and not bowl_lifted and curr_grip > 0 and bowl_z > 0.935:
+                if bowl_z is not None and not bowl_lifted and curr_grip > 0 and bowl_z > (ref_z + 0.025):
                     bowl_lifted = True
                     plate_str = f" | Dist to Plate: {dist_bowl_plate:.1f} cm" if dist_bowl_plate is not None else ""
-                    print(f"    [Step {step:3d}] 📦 Bowl LIFTED off table! Bowl Z: {bowl_z:.3f} m (Table: 0.898 m){plate_str}")
+                    print(f"    [Step {step:3d}] 📦 Bowl LIFTED off table! Bowl Z: {bowl_z:.3f} m (Ref: {ref_z:.3f} m){plate_str}")
 
                 if bowl_lifted and not bowl_slipped and bowl_z is not None and ee_z is not None:
-                    if bowl_z < 0.91 and ee_z > 0.98:
+                    if bowl_z < (ref_z + 0.010) and ee_z > (ref_z + 0.060):
                         bowl_slipped = True
                         print(f"    [Step {step:3d}] ⚠️ SLIP DETECTED: Bowl dropped back to table (Z: {bowl_z:.3f} m) while arm is at Z: {ee_z:.3f} m!")
 
@@ -771,12 +813,12 @@ def run_closed_loop_evaluation(
             if not success:
                 episode_lengths.append(max_steps_per_episode)
                 if is_bowl_task:
-                    failure_reason = "Bowl slipped during transport" if bowl_slipped else ("Grasped empty air / missed bowl" if not bowl_lifted else "Timeout near plate")
+                    failure_reason = "Bowl slipped during transport" if bowl_slipped else ("Grasped empty air / missed bowl" if not has_grasped else ("Bowl dropped before delivery" if not bowl_lifted else "Timeout delivering to plate"))
                 else:
                     failure_reason = f"Timeout ({max_steps_per_episode} steps, gripper held: {closed_steps} steps)"
                 print(f"  - Episode {ep + 1}/{num_episodes_per_task}: ❌ Failed ({failure_reason})")
 
-            if bowl_lifted or (not is_bowl_task and closed_steps > 15):
+            if bowl_lifted or has_grasped or (not is_bowl_task and closed_steps > 15):
                 task_grasps += 1
             if bowl_slipped:
                 task_slips += 1

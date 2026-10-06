@@ -122,6 +122,7 @@ class LiberoSpatialDataset(Dataset):
         skip_per_task: int = 0,
         img_size: int = 256,
         prefix_len: int = 4,
+        cache_in_memory: bool = True,
     ):
         """
         Args:
@@ -133,6 +134,7 @@ class LiberoSpatialDataset(Dataset):
             skip_per_task: Number of initial episodes per task to skip (useful for held-out test splits)
             img_size: Image spatial resolution for SigLIP vision backbone (default: 256)
             prefix_len: Number of historical waypoints P for smooth chunk joins (default: 4)
+            cache_in_memory: If True, preloads all few-shot demonstration frames into RAM (default: True)
         """
         self.dataset = lerobot_dataset
         self.normalizer = normalizer
@@ -141,11 +143,36 @@ class LiberoSpatialDataset(Dataset):
         self.img_size = img_size
         self.skip_per_task = skip_per_task
         self.target_tasks = target_tasks
+        self.cache_in_memory = cache_in_memory
 
         # 1. Index valid episodes matching target tasks
         self.valid_episodes = self._filter_episodes(shots_per_task, skip_per_task)
         # 2. Build frame index mapping: dataset_idx -> (episode_id, frame_in_episode)
         self.valid_frames = self._build_frame_indices()
+
+        # 3. Pre-extract all actions into memory to eliminate redundant disk calls
+        self.action_cache: Dict[int, torch.Tensor] = {}
+        for ep_info in self.valid_episodes:
+            f_idx, t_idx = ep_info["from"], ep_info["to"]
+            for i in range(f_idx, t_idx):
+                try:
+                    a = self.dataset[i]["action"]
+                    if isinstance(a, np.ndarray):
+                        a = torch.from_numpy(a).float()
+                    elif not isinstance(a, torch.Tensor):
+                        a = torch.tensor(a, dtype=torch.float32)
+                    self.action_cache[i] = a
+                except Exception:
+                    pass
+
+        # 4. Optional RAM caching for few-shot demonstration learning
+        self.cached_samples: Optional[List[Dict[str, Any]]] = None
+        if self.cache_in_memory and len(self.valid_frames) > 0:
+            print(f"⚡ Pre-loading {len(self.valid_frames)} demonstration frames into RAM cache for zero-disk-I/O training...")
+            self.cached_samples = []
+            for i in range(len(self.valid_frames)):
+                self.cached_samples.append(self._load_item(i))
+            print(f"✅ All {len(self.cached_samples)} demonstration frames cached in RAM! Training will run at maximum GPU throughput.")
 
     def _get_all_episodes_metadata(self) -> List[Dict]:
         """
@@ -291,9 +318,13 @@ class LiberoSpatialDataset(Dataset):
         return len(self.valid_frames)
 
     def __getitem__(self, index: int) -> Dict[str, torch.Tensor]:
-        """
-        Retrieves observation at time t and the H-step future action chunk A_{t:t+H}.
-        """
+        """Retrieves sample either from instantaneous RAM cache or computes dynamically."""
+        if self.cached_samples is not None and index < len(self.cached_samples):
+            return self.cached_samples[index]
+        return self._load_item(index)
+
+    def _load_item(self, index: int) -> Dict[str, torch.Tensor]:
+        """Retrieves observation at time t and the H-step future action chunk A_{t:t+H}."""
         frame_idx, ep_idx, ep_end = self.valid_frames[index]
         current_sample = self.dataset[frame_idx]
 
@@ -302,7 +333,6 @@ class LiberoSpatialDataset(Dataset):
         img_wrist = current_sample.get("observation.images.wrist_image", None)
 
         if img_front is None:
-            # Fallback for alternative key naming
             for k in current_sample:
                 if "image" in k and "wrist" not in k:
                     img_front = current_sample[k]
@@ -319,7 +349,6 @@ class LiberoSpatialDataset(Dataset):
                 return torch.zeros((3, self.img_size, self.img_size), dtype=torch.float32)
             if img_tensor.dtype == torch.uint8:
                 img_tensor = img_tensor.float() / 255.0
-            # Interpolate to target size if needed
             if img_tensor.shape[-2:] != (self.img_size, self.img_size):
                 img_tensor = F.interpolate(
                     img_tensor.unsqueeze(0),
@@ -327,43 +356,44 @@ class LiberoSpatialDataset(Dataset):
                     mode="bilinear",
                     align_corners=False,
                 ).squeeze(0)
-            # Map pixel values to [-1.0, 1.0] for SigLIP
             return img_tensor * 2.0 - 1.0
 
         image_front_proc = process_img(img_front)
         image_wrist_proc = process_img(img_wrist)
 
-        # 2. Extract Robot Proprioceptive State (joint angles / gripper / end-effector pos)
+        # 2. Extract Robot Proprioceptive State
         state = current_sample.get("observation.state", torch.zeros(8, dtype=torch.float32))
         if isinstance(state, np.ndarray):
             state = torch.from_numpy(state).float()
         elif not isinstance(state, torch.Tensor):
             state = torch.tensor(state, dtype=torch.float32)
 
-        # 3. Assemble H = 16 Future Action Chunk
-        # If the episode ends before t + H, pad with the terminal action
+        # 3. Assemble H = 16 Future Action Chunk via O(1) in-memory action cache
         action_seq = []
         for step in range(self.action_horizon):
             target_idx = min(frame_idx + step, ep_end - 1)
-            raw_action = self.dataset[target_idx]["action"]
-            if isinstance(raw_action, np.ndarray):
-                raw_action = torch.from_numpy(raw_action).float()
-            elif not isinstance(raw_action, torch.Tensor):
-                raw_action = torch.tensor(raw_action, dtype=torch.float32)
+            raw_action = self.action_cache.get(target_idx, None)
+            if raw_action is None:
+                raw_action = self.dataset[target_idx]["action"]
+                if isinstance(raw_action, np.ndarray):
+                    raw_action = torch.from_numpy(raw_action).float()
+                elif not isinstance(raw_action, torch.Tensor):
+                    raw_action = torch.tensor(raw_action, dtype=torch.float32)
             action_seq.append(raw_action)
 
         action_chunk = torch.stack(action_seq, dim=0)  # Shape: [16, 7]
 
-        # 3b. Assemble P = prefix_len Historical Prefix Waypoints (for smooth chunk joins)
-        ep_start = self.valid_frames[index][0]  # episode info is retrieved from valid_frames
+        # 3b. Assemble P = prefix_len Historical Prefix Waypoints
         prefix_seq = []
         for p in range(self.prefix_len, 0, -1):
             prev_idx = max(0, frame_idx - p)
-            raw_prev = self.dataset[prev_idx]["action"]
-            if isinstance(raw_prev, np.ndarray):
-                raw_prev = torch.from_numpy(raw_prev).float()
-            elif not isinstance(raw_prev, torch.Tensor):
-                raw_prev = torch.tensor(raw_prev, dtype=torch.float32)
+            raw_prev = self.action_cache.get(prev_idx, None)
+            if raw_prev is None:
+                raw_prev = self.dataset[prev_idx]["action"]
+                if isinstance(raw_prev, np.ndarray):
+                    raw_prev = torch.from_numpy(raw_prev).float()
+                elif not isinstance(raw_prev, torch.Tensor):
+                    raw_prev = torch.tensor(raw_prev, dtype=torch.float32)
             prefix_seq.append(raw_prev)
 
         prefix_chunk = torch.stack(prefix_seq, dim=0)  # Shape: [prefix_len, 7]

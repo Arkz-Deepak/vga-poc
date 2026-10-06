@@ -45,10 +45,11 @@ from models.vga_policy import VGAPolicy
 def train_vga(
     shots: int = 5,
     batch_size: int = 16,
-    num_steps: int = 300,
+    num_steps: int = 400,
     lr: float = 1e-4,
     output_dir: str = "checkpoints",
     stats_path: Optional[str] = None,
+    in_memory: bool = True,
 ):
     # 0. Distributed / Multi-GPU Process Initialization
     is_distributed = int(os.environ.get("WORLD_SIZE", 1)) > 1
@@ -104,10 +105,12 @@ def train_vga(
         target_tasks=cfg.benchmark_tasks,
         shots_per_task=shots,
         img_size=cfg.img_size,
+        cache_in_memory=in_memory,
     )
 
     sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=local_rank, shuffle=True) if is_distributed else None
-    num_loader_workers = min(4, max(2, os.cpu_count() or 2))
+    # If preloaded in RAM, num_workers=0 is fastest (zero inter-process copy overhead)
+    num_loader_workers = 0 if getattr(train_dataset, "cached_samples", None) is not None else min(2, os.cpu_count() or 2)
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -249,19 +252,18 @@ def train_vga(
 
         step += 1
 
-        if is_main_process and (step % 50 == 0 or step == num_steps):
+        if is_main_process and (step % 25 == 0 or step == num_steps):
             elapsed = time.time() - t_start
+            s_per_step = elapsed / max(1, step)
+            eta_s = int((num_steps - step) * s_per_step)
+            eta_str = f"{eta_s // 60}m {eta_s % 60:02d}s" if eta_s >= 60 else f"{eta_s}s"
             flow_l = loss_dict["flow_loss"].mean().item()
             acc_l = loss_dict["acc_loss"].mean().item()
             jerk_l = loss_dict["jerk_loss"].mean().item()
             print(
-                f"[Step {step:4d}/{num_steps}] "
-                f"Loss: {loss.item():.4f} | "
-                f"Flow MSE: {flow_l:.4f} | "
-                f"Acc: {acc_l:.2f} | "
-                f"Jerk: {jerk_l:.2f} | "
-                f"lambda_kin: {curr_lambda_kin:.4f} | "
-                f"Elapsed: {elapsed:.1f}s"
+                f"[Step {step:4d}/{num_steps} ({step / num_steps * 100:4.1f}%)] "
+                f"Loss: {loss.item():.4f} (Flow: {flow_l:.4f}, Acc: {acc_l:.2f}, Jerk: {jerk_l:.2f}) | "
+                f"{s_per_step:.2f}s/step | ETA: {eta_str}"
             )
 
     # 5. Save Checkpoint (Only on main process)
@@ -340,11 +342,12 @@ def train_vga(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--shots", type=int, default=5, help="Number of demo episodes per task (5 or 10)")
-    parser.add_argument("--steps", type=int, default=300, help="Number of training steps")
+    parser.add_argument("--steps", type=int, default=400, help="Number of training steps (default: 400)")
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size per GPU (default: 16)")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--output_dir", type=str, default="checkpoints", help="Output directory for checkpoints")
     parser.add_argument("--stats_path", type=str, default=None, help="Path to action_stats.json")
+    parser.add_argument("--in_memory", action=argparse.BooleanOptionalAction, default=True, help="Cache few-shot demos in RAM for zero disk-I/O overhead")
     args = parser.parse_args()
 
     train_vga(
@@ -354,4 +357,5 @@ if __name__ == "__main__":
         lr=args.lr,
         output_dir=args.output_dir,
         stats_path=args.stats_path,
+        in_memory=args.in_memory,
     )

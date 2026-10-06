@@ -170,7 +170,10 @@ def train_vga(
     # Mixed precision AMP configuration for Tensor Core acceleration (95%+ GPU saturation)
     use_amp = torch.cuda.is_available()
     amp_dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
-    scaler = torch.cuda.amp.GradScaler(enabled=(use_amp and amp_dtype == torch.float16))
+    try:
+        scaler = torch.amp.GradScaler("cuda", enabled=(use_amp and amp_dtype == torch.float16))
+    except (AttributeError, TypeError):
+        scaler = torch.cuda.amp.GradScaler(enabled=(use_amp and amp_dtype == torch.float16))
 
     # 4. Training Loop
     if is_main_process:
@@ -219,7 +222,7 @@ def train_vga(
 
         optimizer.zero_grad(set_to_none=True)
 
-        with torch.cuda.amp.autocast(enabled=use_amp, dtype=amp_dtype):
+        with torch.autocast(device_type="cuda", enabled=use_amp, dtype=amp_dtype):
             loss_dict = policy(
                 image_front=img_front,
                 input_ids=input_ids,
@@ -285,6 +288,8 @@ def train_vga(
             "input_ids": input_ids[:1],
             "attention_mask": att_mask[:1],
         }
+        if img_wrist is not None:
+            sample_batch["image_wrist"] = img_wrist[:1]
 
         if torch.cuda.is_available():
             amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16

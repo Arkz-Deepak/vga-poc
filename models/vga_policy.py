@@ -64,6 +64,7 @@ class VGAPolicy(nn.Module):
         freeze_backbones: bool = True,
     ):
         super().__init__()
+        self.cfg = cfg
         if cfg is not None:
             vis_dim = getattr(cfg, "vis_dim", vis_dim)
             lm_dim = getattr(cfg, "lm_dim", lm_dim)
@@ -74,6 +75,7 @@ class VGAPolicy(nn.Module):
             action_dim = getattr(cfg, "action_dim", action_dim)
             action_horizon = getattr(cfg, "action_horizon", action_horizon)
             prefix_len = getattr(cfg, "prefix_len", prefix_len)
+            dit_hidden_dim = getattr(cfg, "dit_hidden_dim", dit_hidden_dim)
             dit_layers = getattr(cfg, "dit_layers", dit_layers)
             euler_steps = getattr(cfg, "euler_steps", euler_steps)
             beta_jerk = getattr(cfg, "beta_jerk", beta_jerk)
@@ -343,7 +345,8 @@ class VGAPolicy(nn.Module):
 
             # Generate 16-step action chunk via 4-step Euler ODE integration
             # Conditioning on prefix waypoints if enabled (trained model) or None for backward compatibility
-            use_prefix = getattr(self.cfg, "use_prefix_conditioning", False)
+            cfg = getattr(self, "cfg", None)
+            use_prefix = getattr(cfg, "use_prefix_conditioning", False) if cfg is not None else False
             prefix_wp = self.prev_chunk_tail if (use_prefix and self.prev_chunk_tail is not None) else None
             chunk_norm = self.expert.sample_actions(
                 context=context,
@@ -351,7 +354,7 @@ class VGAPolicy(nn.Module):
             )  # [1, 16, 7]
 
             # Receding horizon execution: execute K steps (default 8) before replanning (RTC / GROOVE)
-            exec_steps = getattr(self.cfg, "execution_horizon", self.action_horizon)
+            exec_steps = getattr(cfg, "execution_horizon", self.action_horizon) if cfg is not None else self.action_horizon
             push_len = min(exec_steps, self.action_horizon)
 
             # Save the tail P=4 executed steps for smooth cross-chunk joins

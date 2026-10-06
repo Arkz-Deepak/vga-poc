@@ -43,13 +43,15 @@ from models.vga_policy import VGAPolicy
 
 
 def train_vga(
-    shots: int = 5,
+    shots: int = 10,
     batch_size: int = 16,
     num_steps: int = 400,
     lr: float = 1e-4,
     output_dir: str = "checkpoints",
     stats_path: Optional[str] = None,
     in_memory: bool = True,
+    task_id: Optional[int] = 0,
+    all_tasks: bool = False,
 ):
     # 0. Distributed / Multi-GPU Process Initialization
     is_distributed = int(os.environ.get("WORLD_SIZE", 1)) > 1
@@ -84,6 +86,30 @@ def train_vga(
         out_dir_path = root_dir / output_dir
     out_dir_path.mkdir(parents=True, exist_ok=True)
 
+    # Resolve target training tasks: Task 0 by default for 10-shot benchmark
+    if all_tasks or task_id is None or task_id < 0:
+        target_tasks = ["all"]
+        task_label = "All 10 Tasks (Multi-Task Benchmark)"
+    else:
+        libero_tasks = [
+            "pick up the black bowl between the plate and the ramekin and place it on the plate",
+            "pick up the black bowl next to the ramekin and place it on the plate",
+            "pick up the black bowl from table center and place it on the plate",
+            "pick up the black bowl on the ramekin and place it on the plate",
+            "pick up the black bowl in the top drawer of the wooden cabinet and place it on the plate",
+            "pick up the black bowl on the stove and place it on the plate",
+            "pick up the black bowl next to the cookie box and place it on the plate",
+            "pick up the black bowl on the cookie box and place it on the plate",
+            "pick up the black bowl next to the plate and place it on the plate",
+            "pick up the black bowl on the wooden cabinet and place it on the plate",
+        ]
+        target_task_str = libero_tasks[task_id] if task_id < len(libero_tasks) else libero_tasks[0]
+        target_tasks = [target_task_str]
+        task_label = f"Task {task_id} ('{target_task_str}')"
+
+    if is_main_process:
+        print(f"Benchmark Target: {task_label} ({shots} demonstrations)")
+
     # 1. Ingest Dataset & Empirical Normalizer
     if is_main_process:
         print("\n--- 1. Dataset Ingestion & Demonstration Subsetting ---")
@@ -102,7 +128,7 @@ def train_vga(
         lerobot_dataset=raw_dataset,
         normalizer=normalizer,
         action_horizon=cfg.action_horizon,
-        target_tasks=cfg.benchmark_tasks,
+        target_tasks=target_tasks,
         shots_per_task=shots,
         img_size=cfg.img_size,
         cache_in_memory=in_memory,
@@ -341,10 +367,12 @@ def train_vga(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--shots", type=int, default=5, help="Number of demo episodes per task (5 or 10)")
+    parser.add_argument("--shots", type=int, default=10, help="Number of demo episodes per task (default: 10)")
     parser.add_argument("--steps", type=int, default=400, help="Number of training steps (default: 400)")
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size per GPU (default: 16)")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
+    parser.add_argument("--task_id", type=int, default=0, help="LIBERO-Spatial task ID (default: 0). Set to -1 or use --all_tasks for all 10 tasks.")
+    parser.add_argument("--all_tasks", action="store_true", help="Train on all 10 LIBERO-Spatial tasks simultaneously.")
     parser.add_argument("--output_dir", type=str, default="checkpoints", help="Output directory for checkpoints")
     parser.add_argument("--stats_path", type=str, default=None, help="Path to action_stats.json")
     parser.add_argument("--in_memory", action=argparse.BooleanOptionalAction, default=True, help="Cache few-shot demos in RAM for zero disk-I/O overhead")
@@ -355,6 +383,8 @@ if __name__ == "__main__":
         num_steps=args.steps,
         batch_size=args.batch_size,
         lr=args.lr,
+        task_id=args.task_id,
+        all_tasks=args.all_tasks,
         output_dir=args.output_dir,
         stats_path=args.stats_path,
         in_memory=args.in_memory,

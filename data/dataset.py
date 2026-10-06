@@ -320,15 +320,32 @@ class LiberoSpatialDataset(Dataset):
     def __getitem__(self, index: int) -> Dict[str, torch.Tensor]:
         """Retrieves sample either from instantaneous RAM cache or computes dynamically."""
         if self.cached_samples is not None and index < len(self.cached_samples):
-            return self.cached_samples[index]
-        return self._load_item(index)
+            item = self.cached_samples[index]
+            f_img = (item["image_front"].float() / 255.0) * 2.0 - 1.0
+            w_img = (item["image_wrist"].float() / 255.0) * 2.0 - 1.0 if item.get("image_wrist") is not None else None
+            return {
+                "image_front": f_img,
+                "image_wrist": w_img,
+                "state": item["state"],
+                "actions": item["actions"],
+                "raw_actions": item["raw_actions"],
+                "prefix_actions": item["prefix_actions"],
+                "task": item["task"],
+            }
 
-    def _load_item(self, index: int) -> Dict[str, torch.Tensor]:
-        """Retrieves observation at time t and the H-step future action chunk A_{t:t+H}."""
+        item = self._load_item(index)
+        f_img = (item["image_front"].float() / 255.0) * 2.0 - 1.0
+        w_img = (item["image_wrist"].float() / 255.0) * 2.0 - 1.0 if item.get("image_wrist") is not None else None
+        item["image_front"] = f_img
+        item["image_wrist"] = w_img
+        return item
+
+    def _load_item(self, index: int) -> Dict[str, Any]:
+        """Retrieves observation at time t and the H-step future action chunk A_{t:t+H} (images in compact uint8)."""
         frame_idx, ep_idx, ep_end = self.valid_frames[index]
         current_sample = self.dataset[frame_idx]
 
-        # 1. Process RGB observations (front camera and wrist camera)
+        # 1. Process RGB observations (stored as compact uint8 to prevent system OOM)
         img_front = current_sample.get("observation.images.image", None)
         img_wrist = current_sample.get("observation.images.wrist_image", None)
 
@@ -343,23 +360,34 @@ class LiberoSpatialDataset(Dataset):
                     img_wrist = current_sample[k]
                     break
 
-        # Resize images to standard visual backbone resolution (C, H, W)
-        def process_img(img_tensor):
-            if img_tensor is None:
-                return torch.zeros((3, self.img_size, self.img_size), dtype=torch.float32)
-            if img_tensor.dtype == torch.uint8:
-                img_tensor = img_tensor.float() / 255.0
-            if img_tensor.shape[-2:] != (self.img_size, self.img_size):
-                img_tensor = F.interpolate(
-                    img_tensor.unsqueeze(0),
+        def process_img_uint8(img_raw):
+            if img_raw is None:
+                return torch.zeros((3, self.img_size, self.img_size), dtype=torch.uint8)
+            if isinstance(img_raw, np.ndarray):
+                img_t = torch.from_numpy(img_raw)
+            elif isinstance(img_raw, torch.Tensor):
+                img_t = img_raw
+            else:
+                img_t = torch.tensor(img_raw)
+
+            # Ensure channel-first format [3, H, W]
+            if img_t.ndim == 3 and img_t.shape[-1] == 3:
+                img_t = img_t.permute(2, 0, 1)
+
+            if img_t.dtype != torch.uint8:
+                img_t = (img_t * 255.0).clamp(0, 255).to(torch.uint8)
+
+            if img_t.shape[-2:] != (self.img_size, self.img_size):
+                img_t = F.interpolate(
+                    img_t.float().unsqueeze(0),
                     size=(self.img_size, self.img_size),
                     mode="bilinear",
                     align_corners=False,
-                ).squeeze(0)
-            return img_tensor * 2.0 - 1.0
+                ).squeeze(0).clamp(0, 255).to(torch.uint8)
+            return img_t
 
-        image_front_proc = process_img(img_front)
-        image_wrist_proc = process_img(img_wrist)
+        image_front_uint8 = process_img_uint8(img_front)
+        image_wrist_uint8 = process_img_uint8(img_wrist) if img_wrist is not None else None
 
         # 2. Extract Robot Proprioceptive State
         state = current_sample.get("observation.state", torch.zeros(8, dtype=torch.float32))
@@ -409,8 +437,8 @@ class LiberoSpatialDataset(Dataset):
         )
 
         return {
-            "image_front": image_front_proc,        # [3, 256, 256]
-            "image_wrist": image_wrist_proc,        # [3, 256, 256]
+            "image_front": image_front_uint8,        # [3, 256, 256] uint8
+            "image_wrist": image_wrist_uint8,        # [3, 256, 256] uint8
             "state": state,                         # [state_dim]
             "actions": normalized_actions,          # [16, 7] normalized
             "raw_actions": action_chunk,            # [16, 7] physical units

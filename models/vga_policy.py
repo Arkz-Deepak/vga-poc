@@ -330,14 +330,20 @@ class VGAPolicy(nn.Module):
             )
 
             # Generate 16-step action chunk via 4-step Euler ODE integration
-            # We use prefix_waypoints=None to strictly match the training distribution
+            # Conditioning on prefix waypoints if enabled (trained model) or None for backward compatibility
+            use_prefix = getattr(self.cfg, "use_prefix_conditioning", False)
+            prefix_wp = self.prev_chunk_tail if (use_prefix and self.prev_chunk_tail is not None) else None
             chunk_norm = self.expert.sample_actions(
                 context=context,
-                prefix_waypoints=None,
+                prefix_waypoints=prefix_wp,
             )  # [1, 16, 7]
 
-            # Save the tail P=4 steps to maintain interface compatibility
-            self.prev_chunk_tail = chunk_norm[:, -self.prefix_len:, :].clone()
+            # Receding horizon execution: execute K steps (default 8) before replanning (RTC / GROOVE)
+            exec_steps = getattr(self.cfg, "execution_horizon", self.action_horizon)
+            push_len = min(exec_steps, self.action_horizon)
+
+            # Save the tail P=4 executed steps for smooth cross-chunk joins
+            self.prev_chunk_tail = chunk_norm[:, max(0, push_len - self.prefix_len):push_len, :].clone()
 
             # Unnormalize actions to physical units if normalizer provided
             if self.normalizer is not None:
@@ -345,9 +351,9 @@ class VGAPolicy(nn.Module):
             else:
                 chunk_phys = chunk_norm
 
-            # Push all 16 steps into queue in physical units
+            # Push only the K executed steps into queue (triggers replanning after K steps)
             chunk_cpu = chunk_phys.squeeze(0).cpu()  # [16, 7]
-            for step_idx in range(self.action_horizon):
+            for step_idx in range(push_len):
                 self.action_queue.append(chunk_cpu[step_idx].clone())
 
         # 2. Pop the next ready action from queue and apply Schmitt Trigger per physical step

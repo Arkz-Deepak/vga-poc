@@ -202,12 +202,18 @@ def train_vga(
         # Anneal kinematic loss weight: 0.0 -> max_lambda_kin over kinematic_anneal_steps
         curr_lambda_kin = cfg.max_lambda_kin * min(1.0, step / max(1, cfg.kinematic_anneal_steps))
 
+        # Extract prefix waypoints for smooth chunk join training
+        prefix_wp = batch.get("prefix_actions", None)
+        if prefix_wp is not None:
+            prefix_wp = prefix_wp.to(device)
+
         optimizer.zero_grad()
         loss_dict = policy(
             image_front=img_front,
             input_ids=input_ids,
             actions=actions,
             attention_mask=att_mask,
+            prefix_waypoints=prefix_wp,
             lambda_kin=curr_lambda_kin,
         )
 

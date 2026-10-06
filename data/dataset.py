@@ -121,6 +121,7 @@ class LiberoSpatialDataset(Dataset):
         shots_per_task: Optional[int] = None,
         skip_per_task: int = 0,
         img_size: int = 256,
+        prefix_len: int = 4,
     ):
         """
         Args:
@@ -131,10 +132,12 @@ class LiberoSpatialDataset(Dataset):
             shots_per_task: If specified, limit the dataset to N episodes per task (e.g. 5 or 10)
             skip_per_task: Number of initial episodes per task to skip (useful for held-out test splits)
             img_size: Image spatial resolution for SigLIP vision backbone (default: 256)
+            prefix_len: Number of historical waypoints P for smooth chunk joins (default: 4)
         """
         self.dataset = lerobot_dataset
         self.normalizer = normalizer
         self.action_horizon = action_horizon
+        self.prefix_len = prefix_len
         self.img_size = img_size
         self.skip_per_task = skip_per_task
         self.target_tasks = target_tasks or [
@@ -342,8 +345,23 @@ class LiberoSpatialDataset(Dataset):
 
         action_chunk = torch.stack(action_seq, dim=0)  # Shape: [16, 7]
 
-        # 4. Normalize Action Chunk
+        # 3b. Assemble P = prefix_len Historical Prefix Waypoints (for smooth chunk joins)
+        ep_start = self.valid_frames[index][0]  # episode info is retrieved from valid_frames
+        prefix_seq = []
+        for p in range(self.prefix_len, 0, -1):
+            prev_idx = max(0, frame_idx - p)
+            raw_prev = self.dataset[prev_idx]["action"]
+            if isinstance(raw_prev, np.ndarray):
+                raw_prev = torch.from_numpy(raw_prev).float()
+            elif not isinstance(raw_prev, torch.Tensor):
+                raw_prev = torch.tensor(raw_prev, dtype=torch.float32)
+            prefix_seq.append(raw_prev)
+
+        prefix_chunk = torch.stack(prefix_seq, dim=0)  # Shape: [prefix_len, 7]
+
+        # 4. Normalize Action Chunk and Prefix Waypoints
         normalized_actions = self.normalizer.normalize(action_chunk)
+        normalized_prefix = self.normalizer.normalize(prefix_chunk)
 
         # 5. Extract Language Instruction string
         task_instruction = current_sample.get(
@@ -357,5 +375,6 @@ class LiberoSpatialDataset(Dataset):
             "state": state,                         # [state_dim]
             "actions": normalized_actions,          # [16, 7] normalized
             "raw_actions": action_chunk,            # [16, 7] physical units
+            "prefix_actions": normalized_prefix,    # [4, 7] normalized
             "task": task_instruction,              # string
         }

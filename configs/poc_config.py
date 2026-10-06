@@ -30,8 +30,10 @@ class ModelConfig:
 
     # 3. Action Expert (Diffusion Transformer / Flow Matching)
     action_horizon: int = 16      # Chunk horizon H: predicts 16 future steps
+    execution_horizon: int = 8    # Receding horizon K: execute 8 steps before replanning (RTC / GROOVE)
     action_dim: int = 7           # 3 for delta pos (x, y, z), 3 for axis-angle rot (rx, ry, rz), 1 for gripper (g)
     prefix_len: int = 4           # Buffer tail length P: 4 waypoints (steps 13-16 of previous chunk)
+    use_prefix_conditioning: bool = False  # Set to True when model was trained with prefix waypoints
     dit_layers: int = 12          # 12-layer Diffusion Transformer expert
     euler_steps: int = 4          # Number of function evaluations (NFE=4) for real-time 50 Hz control
 

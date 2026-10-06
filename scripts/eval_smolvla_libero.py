@@ -154,7 +154,13 @@ def run_smolvla_evaluation(
 
     # 2. Load SmolVLA Policy from Hub or Local Path
     print(f"\n--- Loading SmolVLA Policy: {policy_path} ---")
-    from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
+    try:
+        from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
+    except ImportError:
+        try:
+            from lerobot.common.policies.smolvla.modeling_smolvla import SmolVLAPolicy
+        except ImportError:
+            from lerobot.policies import SmolVLAPolicy
 
     policy = SmolVLAPolicy.from_pretrained(policy_path)
     policy.to(device)
@@ -230,30 +236,25 @@ def run_smolvla_evaluation(
         print(f"Task [{task_id}]: {task_desc}")
         print(f"=======================================================")
 
+        env_kwargs = {
+            "task_suite": suite,
+            "task_id": task_id,
+            "task_suite_name": "libero_spatial",
+            "observation_width": 256,
+            "observation_height": 256,
+            "control_mode": "relative",
+            "episode_length": max_steps_per_episode,
+        }
         try:
-            env = LiberoEnv(
-                task_suite=suite,
-                task_id=task_id,
-                task_suite_name="libero_spatial",
-                observation_width=256,
-                observation_height=256,
-                control_mode="relative",
-                episode_length=max_steps_per_episode,
-                init_states=True,
-            )
+            env = LiberoEnv(**env_kwargs, init_states=True)
             print("Initialized LiberoEnv with benchmark demonstration init_states=True.")
-        except Exception as e_init:
-            print(f"Notice: Loading init_states failed ({e_init}), falling back to procedural reset...")
-            env = LiberoEnv(
-                task_suite=suite,
-                task_id=task_id,
-                task_suite_name="libero_spatial",
-                observation_width=256,
-                observation_height=256,
-                control_mode="relative",
-                episode_length=max_steps_per_episode,
-                init_states=False,
-            )
+        except Exception:
+            try:
+                env = LiberoEnv(**env_kwargs, init_states=False)
+                print("Initialized LiberoEnv with procedural BDDL reset (init_states=False).")
+            except Exception:
+                env = LiberoEnv(**env_kwargs)
+                print("Initialized LiberoEnv without init_states parameter.")
 
         # Pre-tokenize task instruction
         seq_len = 48
@@ -550,7 +551,14 @@ def main():
 
     args = parser.parse_args()
 
-    target_tasks = None if args.all_tasks else [f"task_{args.task_id}"]
+    from lerobot.envs.libero import _get_suite
+    suite_tmp = _get_suite("libero_spatial")
+    if args.task_id is not None and args.task_id < len(suite_tmp.tasks):
+        target_tasks = [suite_tmp.get_task(args.task_id).language]
+    elif args.all_tasks:
+        target_tasks = ["all"]
+    else:
+        target_tasks = [suite_tmp.get_task(0).language]
 
     run_smolvla_evaluation(
         policy_path=args.policy_path,

@@ -509,30 +509,25 @@ def run_closed_loop_evaluation(
         print(f"Task [{task_id}]: {task_desc}")
         print(f"=======================================================")
 
+        env_kwargs = {
+            "task_suite": suite,
+            "task_id": task_id,
+            "task_suite_name": "libero_spatial",
+            "observation_width": 256,
+            "observation_height": 256,
+            "control_mode": "relative",
+            "episode_length": max_steps_per_episode,
+        }
         try:
-            env = LiberoEnv(
-                task_suite=suite,
-                task_id=task_id,
-                task_suite_name="libero_spatial",
-                observation_width=cfg.img_size,
-                observation_height=cfg.img_size,
-                control_mode="relative",
-                episode_length=max_steps_per_episode,
-                init_states=True,
-            )
+            env = LiberoEnv(**env_kwargs, init_states=True)
             print(f"Initialized LiberoEnv with benchmark demonstration init_states=True.")
-        except Exception as e_init:
-            print(f"Notice: Loading fixed init_states failed ({e_init}). Initializing LiberoEnv with procedural BDDL reset (init_states=False)...")
-            env = LiberoEnv(
-                task_suite=suite,
-                task_id=task_id,
-                task_suite_name="libero_spatial",
-                observation_width=cfg.img_size,
-                observation_height=cfg.img_size,
-                control_mode="relative",
-                episode_length=max_steps_per_episode,
-                init_states=False,
-            )
+        except Exception:
+            try:
+                env = LiberoEnv(**env_kwargs, init_states=False)
+                print(f"Initialized LiberoEnv with procedural BDDL reset (init_states=False).")
+            except Exception:
+                env = LiberoEnv(**env_kwargs)
+                print(f"Initialized LiberoEnv without init_states parameter.")
 
         # Pre-tokenize task instruction
         if tok is not None:

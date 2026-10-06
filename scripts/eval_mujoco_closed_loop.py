@@ -421,24 +421,27 @@ def run_closed_loop_evaluation(
     total_suite_tasks = len(suite.tasks)
     print(f"LIBERO-Spatial Suite loaded: {total_suite_tasks} tasks available.")
 
-    # Find task indices matching our exact target tasks
+    # Find task indices matching our target tasks (or all 10 tasks in suite if 'all')
     matched_task_indices = []
-    for target in target_tasks:
-        target_clean = target.lower().replace(" ", "_")
-        matched = False
-        for idx in range(total_suite_tasks):
-            t_name = suite.get_task(idx).name.lower()
-            t_lang = suite.get_task(idx).language.lower()
-            if target_clean == t_name or target_clean in t_name or target.lower() == t_lang:
-                matched_task_indices.append((idx, suite.get_task(idx).language))
-                matched = True
-                break
-        if not matched:
-            print(f"Notice: Could not match exact task '{target}' in suite.")
+    if target_tasks is None or len(target_tasks) == 0 or "all" in [str(t).lower() for t in target_tasks]:
+        matched_task_indices = [(i, suite.get_task(i).language) for i in range(total_suite_tasks)]
+    else:
+        for target in target_tasks:
+            target_clean = target.lower().replace(" ", "_")
+            matched = False
+            for idx in range(total_suite_tasks):
+                t_name = suite.get_task(idx).name.lower()
+                t_lang = suite.get_task(idx).language.lower()
+                if target_clean == t_name or target_clean in t_name or target.lower() == t_lang:
+                    matched_task_indices.append((idx, suite.get_task(idx).language))
+                    matched = True
+                    break
+            if not matched:
+                print(f"Notice: Could not match exact task '{target}' in suite.")
 
     if not matched_task_indices:
-        print("Warning: Could not match specific task names, using first 3 tasks in suite.")
-        matched_task_indices = [(i, suite.get_task(i).language) for i in range(min(3, total_suite_tasks))]
+        print(f"Evaluating all {total_suite_tasks} tasks in LIBERO-Spatial suite.")
+        matched_task_indices = [(i, suite.get_task(i).language) for i in range(total_suite_tasks)]
 
     print(f"Target tasks to evaluate ({len(matched_task_indices)}):")
     for t_idx, t_name in matched_task_indices:
@@ -976,6 +979,10 @@ def main():
                         help="Enable proximity grasp guard preventing premature mid-air clamping (default: True)")
     parser.add_argument("--no_proximity_guard", dest="proximity_guard", action="store_false",
                         help="Disable proximity grasp guard")
+    parser.add_argument("--all_tasks", action="store_true", default=True,
+                        help="Evaluate all 10 tasks in LIBERO-Spatial suite (default: True)")
+    parser.add_argument("--task_id", type=int, default=None,
+                        help="Evaluate single specific task index (0-9) instead of all")
     parser.add_argument("--output_json", type=str, default="results/closed_loop_simulation_results.json",
                         help="Path to save simulation metrics JSON")
     args = parser.parse_args()
@@ -983,10 +990,18 @@ def main():
     ckpt_resolved = resolve_file(args.checkpoint) or "checkpoints/vga_libero_10shot.pt"
     stats_resolved = resolve_file(args.stats_path) or "configs/action_stats.json"
 
+    if args.task_id is not None:
+        suite_tmp = _get_suite("libero_spatial")
+        target_tasks = [suite_tmp.get_task(args.task_id).language] if args.task_id < len(suite_tmp.tasks) else ["all"]
+    elif args.all_tasks:
+        target_tasks = ["all"]
+    else:
+        target_tasks = cfg.benchmark_tasks
+
     run_closed_loop_evaluation(
         checkpoint_path=ckpt_resolved,
         stats_path=stats_resolved,
-        target_tasks=cfg.benchmark_tasks,
+        target_tasks=target_tasks,
         num_episodes_per_task=args.num_episodes,
         max_steps_per_episode=args.max_steps,
         device=args.device,

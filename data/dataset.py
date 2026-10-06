@@ -140,11 +140,7 @@ class LiberoSpatialDataset(Dataset):
         self.prefix_len = prefix_len
         self.img_size = img_size
         self.skip_per_task = skip_per_task
-        self.target_tasks = target_tasks or [
-            "pick_up_the_black_bowl_between_the_plate_and_the_ramekin_and_place_it_on_the_plate",
-            "pick_up_the_alphabet_soup_and_place_it_in_the_basket",
-            "push_the_plate_to_the_front_of_the_stove",
-        ]
+        self.target_tasks = target_tasks
 
         # 1. Index valid episodes matching target tasks
         self.valid_episodes = self._filter_episodes(shots_per_task, skip_per_task)
@@ -222,6 +218,19 @@ class LiberoSpatialDataset(Dataset):
     def _filter_episodes(self, shots_per_task: Optional[int], skip_per_task: int = 0) -> List[Dict]:
         """Filters dataset episodes for the target tasks, with optional N-shot quota and initial skip offset."""
         all_eps = self._get_all_episodes_metadata()
+
+        # If target_tasks is None or 'all', discover all unique tasks across the dataset
+        if self.target_tasks is None or (len(self.target_tasks) == 1 and str(self.target_tasks[0]).lower() == "all"):
+            unique_tasks = []
+            for ep_info in all_eps:
+                t = str(ep_info["task"]).strip()
+                if t and t not in unique_tasks:
+                    unique_tasks.append(t)
+            self.target_tasks = unique_tasks
+            print(f"Dynamically discovered {len(self.target_tasks)} benchmark tasks across dataset for training:")
+            for t_name in self.target_tasks:
+                print(f"  - {t_name}")
+
         task_seen: Dict[str, int] = {t: 0 for t in self.target_tasks}
         task_counts: Dict[str, int] = {t: 0 for t in self.target_tasks}
         selected: List[Dict] = []

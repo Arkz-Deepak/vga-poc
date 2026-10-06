@@ -53,11 +53,7 @@ class ModelConfig:
     async_trigger_step: int = 11  # Step at which background inference begins (70% buffer consumption)
 
     # 6. Benchmark Tasks (LIBERO-Spatial)
-    benchmark_tasks: List[str] = field(default_factory=lambda: [
-        "pick_up_the_black_bowl_between_the_plate_and_the_ramekin_and_place_it_on_the_plate",
-        "pick_up_the_alphabet_soup_and_place_it_in_the_basket",
-        "push_the_plate_to_the_front_of_the_stove"
-    ])
+    benchmark_tasks: List[str] = field(default_factory=lambda: ["all"])
 
 
 # Default configuration instance

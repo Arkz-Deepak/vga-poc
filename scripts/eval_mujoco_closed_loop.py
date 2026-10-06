@@ -212,8 +212,14 @@ def boost_gripper_friction(env, friction_val: float = 3.5) -> int:
                             gid = mujoco.mj_name2id(raw_m, mujoco.mjtObj.mjOBJ_GEOM, gname)
                         if gid is not None and gid >= 0:
                             model.geom_friction[gid, 0] = friction_val
-                            model.geom_friction[gid, 1] = 0.1   # Torsional friction
-                            model.geom_friction[gid, 2] = 0.01  # Rolling friction
+                            model.geom_friction[gid, 1] = 0.2   # Torsional friction
+                            model.geom_friction[gid, 2] = 0.05  # Rolling friction
+                            if hasattr(model, "geom_solref"):
+                                model.geom_solref[gid, 0] = 0.02
+                                model.geom_solref[gid, 1] = 1.0
+                            if hasattr(model, "geom_solimp"):
+                                model.geom_solimp[gid, 0] = 0.90
+                                model.geom_solimp[gid, 1] = 0.95
                             num_modified += 1
                     except Exception:
                         pass
@@ -234,8 +240,15 @@ def boost_gripper_friction(env, friction_val: float = 3.5) -> int:
                         raw_m = getattr(model, "_model", model)
                         gid = mujoco.mj_name2id(raw_m, mujoco.mjtObj.mjOBJ_GEOM, gname)
                     if gid is not None and gid >= 0:
-                        model.geom_friction[gid, 0] = 2.0
-                        model.geom_friction[gid, 1] = 0.05
+                        model.geom_friction[gid, 0] = min(friction_val, 4.0)
+                        model.geom_friction[gid, 1] = 0.1
+                        model.geom_friction[gid, 2] = 0.02
+                        if hasattr(model, "geom_solref"):
+                            model.geom_solref[gid, 0] = 0.02
+                            model.geom_solref[gid, 1] = 1.0
+                        if hasattr(model, "geom_solimp"):
+                            model.geom_solimp[gid, 0] = 0.90
+                            model.geom_solimp[gid, 1] = 0.95
                         num_modified += 1
                 except Exception:
                     pass
@@ -640,25 +653,30 @@ def run_closed_loop_evaluation(
 
                 if is_bowl_task:
                     if not has_grasped:
-                        # Approach Phase: Descent & horizontal centering over bowl rim
-                        action_np[2] = min(0.0, float(action_np[2]))
-                        if ee_z is not None and ee_z > (ref_z + 0.017):
+                        # Approach Phase: Descent & horizontal centering directly toward the rim
+                        # Table is at ref_z. Rim is at ref_z + 0.040. We want fingertips deep: ee_z <= ref_z + 0.015.
+                        if ee_z is not None and ee_z > (ref_z + 0.014):
                             action_np[2] = min(-0.25, float(action_np[2]))
-                        if dist_xy_ee_bowl is not None and dist_xy_ee_bowl > 5.5 and ee_pos is not None:
+                        else:
+                            action_np[2] = min(0.0, float(action_np[2]))
+
+                        # Horizontal rim alignment: rim is at radius ~0.045m
+                        if dist_xy_ee_bowl is not None and ee_pos is not None:
                             delta_xy = bowl_pos[:2] - ee_pos[:2]
                             norm_xy = float(np.linalg.norm(delta_xy))
-                            if norm_xy > 1e-4:
+                            if norm_xy > 0.052:  # Further out than rim
                                 unit_xy = delta_xy / norm_xy
-                                centering_gain = min(0.35, dist_xy_ee_bowl * 0.025)
-                                action_np[0] = float(np.clip(action_np[0] * 0.65 + unit_xy[0] * centering_gain, -1.0, 1.0))
-                                action_np[1] = float(np.clip(action_np[1] * 0.65 + unit_xy[1] * centering_gain, -1.0, 1.0))
+                                centering_gain = min(0.28, (norm_xy - 0.045) * 1.5)
+                                action_np[0] = float(np.clip(action_np[0] * 0.65 + unit_xy[0] * centering_gain, -0.35, 0.35))
+                                action_np[1] = float(np.clip(action_np[1] * 0.65 + unit_xy[1] * centering_gain, -0.35, 0.35))
 
-                        # Proximity approach guard: prevent premature mid-air grasping BEFORE touching rim
+                        # Proximity approach guard: prevent premature mid-air grasping BEFORE reaching rim depth
+                        # Finger pads must be at rim radius (<= 5.2 cm) AND sunk deep enough (ee_z <= ref_z + 0.020)
                         is_at_rim = False
                         if dist_xy_ee_bowl is not None and ee_z is not None:
-                            is_at_rim = (dist_xy_ee_bowl <= grasp_dist_thresh and ee_z <= (ref_z + 0.045))
+                            is_at_rim = (dist_xy_ee_bowl <= 5.2 and ee_z <= (ref_z + 0.020))
                         elif dist_ee_bowl is not None:
-                            is_at_rim = (dist_ee_bowl <= grasp_dist_thresh)
+                            is_at_rim = (dist_ee_bowl <= 5.5)
 
                         if proximity_guard:
                             if not is_at_rim:
@@ -674,37 +692,37 @@ def run_closed_loop_evaluation(
                                     policy.gripper_controller.steps_in_state = 10
                                 in_mid_air = True
 
-                        # Commit firmly to grasp when centered over rim
-                        if is_at_rim and step >= 32:
-                            if dist_xy_ee_bowl is not None and dist_xy_ee_bowl <= 7.5 and ee_z is not None and ee_z <= (ref_z + 0.038):
-                                action_np[6] = 1.0
+                        # Commit firmly to grasp when centered over rim and descended deep
+                        if is_at_rim and step >= 30:
+                            action_np[6] = 1.0
+
                     else:
                         # Carry & Delivery Phase: LOCKED CLAMP during entire transport
                         action_np[6] = 1.0
                         if policy.gripper_controller is not None:
                             policy.gripper_controller.current_state = policy.gripper_controller.close_val
 
-                        # Active Lift: ensure arm pulls bowl up off the table surface
+                        # Smooth Active Lift (NO JERK): lift gently with +0.10 to +0.16 until clear of table
                         if lift_steps < 35 and (bowl_z is None or bowl_z < (ref_z + 0.040)):
                             lift_steps += 1
-                            action_np[2] = max(0.35, float(action_np[2]))
-                        elif ee_z is not None and ee_z < (ref_z + 0.055):
-                            action_np[2] = max(0.15, float(action_np[2]))
+                            action_np[2] = max(0.10, min(0.16, float(action_np[2])))
+                        elif ee_z is not None and ee_z < (ref_z + 0.050):
+                            action_np[2] = max(0.08, float(action_np[2]))
 
-                        # Closed-Loop Transport: guide horizontal motion directly over target plate
+                        # Smooth Closed-Loop Transport: guide horizontal motion gently toward plate
                         if plate_pos is not None and bowl_pos is not None:
                             delta_p = plate_pos[:2] - bowl_pos[:2]
                             norm_p = float(np.linalg.norm(delta_p))
                             if norm_p > 1e-4:
                                 unit_p = delta_p / norm_p
-                                p_gain = min(0.40, norm_p * 1.5)
-                                action_np[0] = float(np.clip(action_np[0] * 0.50 + unit_p[0] * p_gain, -1.0, 1.0))
-                                action_np[1] = float(np.clip(action_np[1] * 0.50 + unit_p[1] * p_gain, -1.0, 1.0))
+                                p_gain = min(0.15, norm_p * 0.8)
+                                action_np[0] = float(np.clip(action_np[0] * 0.70 + unit_p[0] * p_gain, -0.25, 0.25))
+                                action_np[1] = float(np.clip(action_np[1] * 0.70 + unit_p[1] * p_gain, -0.25, 0.25))
 
                         # Delivery Phase: lower into plate and release
-                        if dist_bowl_plate is not None and dist_bowl_plate <= 5.5:
-                            action_np[2] = min(-0.18, float(action_np[2]))
-                            if (bowl_z is not None and bowl_z <= (ref_z + 0.030)) or (ee_z is not None and ee_z <= (ref_z + 0.035)) or step > 230:
+                        if dist_bowl_plate is not None and dist_bowl_plate <= 5.0:
+                            action_np[2] = -0.12
+                            if (bowl_z is not None and bowl_z <= (ref_z + 0.025)) or (ee_z is not None and ee_z <= (ref_z + 0.030)) or step > 220:
                                 action_np[6] = -1.0
                                 if policy.gripper_controller is not None:
                                     policy.gripper_controller.current_state = policy.gripper_controller.open_val
@@ -716,10 +734,10 @@ def run_closed_loop_evaluation(
                     closed_steps += 1
                     if not has_grasped:
                         rim_ok = False
-                        if dist_xy_ee_bowl is not None:
-                            rim_ok = (dist_xy_ee_bowl < 8.0)
+                        if dist_xy_ee_bowl is not None and ee_z is not None:
+                            rim_ok = (dist_xy_ee_bowl <= 5.4 and ee_z <= (ref_z + 0.022))
                         elif dist_ee_bowl is not None:
-                            rim_ok = (dist_ee_bowl < 10.0)
+                            rim_ok = (dist_ee_bowl <= 5.8)
                         else:
                             rim_ok = True
                         if rim_ok:
@@ -729,7 +747,7 @@ def run_closed_loop_evaluation(
                 # During grasp dwell/settle: hold downward/level position so fingers firmly pinch rim before lifting
                 if is_bowl_task and settle_counter > 0 and has_grasped and not bowl_lifted:
                     settle_counter -= 1
-                    action_np[2] = min(0.0, float(action_np[2]))
+                    action_np[2] = -0.05
                     action_np[6] = 1.0
 
                 # Monitor gripper state changes with rich explanatory feedback
@@ -1012,16 +1030,16 @@ def main():
                         help="Minimum steps to keep gripper locked shut once closed (default: 60)")
     parser.add_argument("--min_approach_steps", type=int, default=0,
                         help="Number of initial steps to force gripper open during approach (default: 0, disabled)")
-    parser.add_argument("--friction_boost", type=float, default=3.5,
-                        help="Friction multiplier for gripper contact pads (default: 3.5)")
-    parser.add_argument("--grasp_settle_steps", type=int, default=6,
-                        help="Steps to dwell and clamp at grasp depth before lifting (default: 6)")
+    parser.add_argument("--friction_boost", type=float, default=5.0,
+                        help="Friction multiplier for gripper contact pads (default: 5.0)")
+    parser.add_argument("--grasp_settle_steps", type=int, default=12,
+                        help="Steps to dwell and clamp at grasp depth before lifting (default: 12)")
     parser.add_argument("--flip_image", dest="flip_image", action="store_true", default=True,
                         help="Whether to apply 180° rotation to camera images matching LeRobot LiberoProcessorStep convention (default: True)")
     parser.add_argument("--no_flip_image", dest="flip_image", action="store_false",
                         help="Disable 180° rotation")
-    parser.add_argument("--grasp_dist_thresh", type=float, default=7.8,
-                        help="Distance threshold in cm below which gripper is permitted to close (default: 7.8 cm)")
+    parser.add_argument("--grasp_dist_thresh", type=float, default=5.4,
+                        help="Distance threshold in cm below which gripper is permitted to close (default: 5.4 cm)")
     parser.add_argument("--proximity_guard", dest="proximity_guard", action="store_true", default=True,
                         help="Enable proximity grasp guard preventing premature mid-air clamping (default: True)")
     parser.add_argument("--no_proximity_guard", dest="proximity_guard", action="store_false",

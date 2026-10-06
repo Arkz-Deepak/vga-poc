@@ -366,17 +366,23 @@ def run_closed_loop_evaluation(
     schmitt_high: float = 0.60,
     min_hold_steps: int = 60,
     min_approach_steps: int = 0,
-    friction_boost: float = 3.5,
-    grasp_settle_steps: int = 6,
+    friction_boost: float = 5.0,
+    grasp_settle_steps: int = 12,
     flip_image: bool = True,
-    grasp_dist_thresh: float = 7.8,
+    grasp_dist_thresh: float = 5.4,
     proximity_guard: bool = True,
+    policy_type: str = "vga",
+    pure_policy: bool = True,
+    n_action_steps: int = 10,
 ):
+    is_smolvla = (policy_type.lower() == "smolvla" or "smolvla" in str(checkpoint_path).lower())
+    banner_name = "SmolVLA-450M Baseline" if is_smolvla else "VGA PoC"
     print("=================================================================")
-    print("   VGA Closed-Loop MuJoCo Simulation Benchmark (LIBERO-Spatial)   ")
+    print(f"   {banner_name} Closed-Loop MuJoCo Benchmark (LIBERO-Spatial)   ")
     print("=================================================================")
-    print(f"Device: {device}")
+    print(f"Device:           {device}")
     print(f"Loading checkpoint: {checkpoint_path}")
+    print(f"Execution Mode:   {'PURE NEURAL POLICY (No heuristic steering)' if pure_policy else 'ASSISTED / HEURISTIC'}")
 
     # 1. Check for LIBERO simulation dependencies
     try:
@@ -396,37 +402,60 @@ def run_closed_loop_evaluation(
         print("Notice: imageio not installed; video recording disabled.")
 
     # 2. Load Checkpoint and Instantiate Policy
-    try:
-        ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    except TypeError:
-        ckpt = torch.load(checkpoint_path, map_location=device)
-
-    loaded_cfg = ckpt.get("config", cfg) if isinstance(ckpt, dict) else cfg
-    normalizer = Normalizer(stats_path=stats_path)
-    policy = VGAPolicy(
-        cfg=loaded_cfg,
-        normalizer=normalizer,
-        schmitt_low=schmitt_low,
-        schmitt_high=schmitt_high,
-    ).to(device)
-    policy.gripper_controller.min_hold_steps = min_hold_steps
-
-    if isinstance(ckpt, dict) and "policy_state_dict" in ckpt:
-        state_dict = ckpt["policy_state_dict"]
-    elif isinstance(ckpt, dict) and "model_state_dict" in ckpt:
-        state_dict = ckpt["model_state_dict"]
-    elif isinstance(ckpt, dict) and "policy" in ckpt:
-        state_dict = ckpt["policy"]
+    tok = None
+    if is_smolvla:
+        print(f"\n--- Loading SmolVLA Policy: {checkpoint_path} ---")
+        from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
+        policy = SmolVLAPolicy.from_pretrained(checkpoint_path)
+        policy.to(device)
+        policy.eval()
+        if hasattr(policy, "config") and hasattr(policy.config, "n_action_steps"):
+            policy.config.n_action_steps = n_action_steps
+        try:
+            tok = getattr(getattr(getattr(policy, "model", None), "vlm_with_expert", None), "processor", None)
+            tok = getattr(tok, "tokenizer", None)
+        except Exception:
+            pass
+        if tok is None:
+            try:
+                from transformers import AutoTokenizer
+                tok = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolVLM2-500M-Video-Instruct")
+            except Exception:
+                pass
+        total_p = sum(p.numel() for p in policy.parameters())
+        print(f"✅ SmolVLA loaded successfully ({total_p / 1e6:.1f}M params, n_action_steps={n_action_steps})")
     else:
-        state_dict = ckpt
+        try:
+            ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        except TypeError:
+            ckpt = torch.load(checkpoint_path, map_location=device)
 
-    cleaned_state = {k[7:] if k.startswith("module.") else k: v for k, v in state_dict.items()}
-    policy.load_state_dict(cleaned_state, strict=False)
-    policy.eval()
+        loaded_cfg = ckpt.get("config", cfg) if isinstance(ckpt, dict) else cfg
+        normalizer = Normalizer(stats_path=stats_path)
+        policy = VGAPolicy(
+            cfg=loaded_cfg,
+            normalizer=normalizer,
+            schmitt_low=schmitt_low,
+            schmitt_high=schmitt_high,
+        ).to(device)
+        policy.gripper_controller.min_hold_steps = min_hold_steps
 
-    tok = policy.encoder.get_tokenizer()
-    if tok is not None and getattr(tok, "pad_token", None) is None:
-        tok.pad_token = tok.eos_token
+        if isinstance(ckpt, dict) and "policy_state_dict" in ckpt:
+            state_dict = ckpt["policy_state_dict"]
+        elif isinstance(ckpt, dict) and "model_state_dict" in ckpt:
+            state_dict = ckpt["model_state_dict"]
+        elif isinstance(ckpt, dict) and "policy" in ckpt:
+            state_dict = ckpt["policy"]
+        else:
+            state_dict = ckpt
+
+        cleaned_state = {k[7:] if k.startswith("module.") else k: v for k, v in state_dict.items()}
+        policy.load_state_dict(cleaned_state, strict=False)
+        policy.eval()
+
+        tok = policy.encoder.get_tokenizer()
+        if tok is not None and getattr(tok, "pad_token", None) is None:
+            tok.pad_token = tok.eos_token
 
     # 3. Instantiate Benchmark Suite
     print("\n--- Initializing LIBERO-Spatial Suite ---")
@@ -630,87 +659,108 @@ def run_closed_loop_evaluation(
                         dist_bowl_plate = float(np.linalg.norm(bowl_pos[:2] - plate_pos[:2]) * 100.0)
 
                 # Track replanning step index (queue empty means replanning boundary)
-                if len(policy.action_queue) == 0 and step > 0:
+                if hasattr(policy, "action_queue") and len(policy.action_queue) == 0 and step > 0:
                     replanning_step_indices.add(step)
 
-                # Real-time policy action query (uses 16-step chunk queue)
-                if use_amp:
-                    with torch.autocast(device_type="cuda", dtype=amp_dtype):
+                # Real-time policy action query
+                if is_smolvla:
+                    img_c1 = torch.from_numpy(img_front_np).permute(2, 0, 1).float().unsqueeze(0).to(device) / 255.0
+                    img_c2 = (torch.from_numpy(img_wrist_np).permute(2, 0, 1).float().unsqueeze(0).to(device) / 255.0) if img_wrist_np is not None else img_c1
+                    state_raw = obs.get("state", None)
+                    if state_raw is None:
+                        state_raw = np.zeros(6, dtype=np.float32)
+                    state_arr = np.array(state_raw, dtype=np.float32)
+                    if len(state_arr) >= 6:
+                        state_arr = state_arr[:6]
+                    else:
+                        state_arr = np.pad(state_arr, (0, 6 - len(state_arr)))
+                    state_t = torch.from_numpy(state_arr).unsqueeze(0).to(device)
+                    batch = {
+                        "observation.images.camera1": img_c1,
+                        "observation.images.camera2": img_c2,
+                        "observation.images.camera3": img_c1,
+                        "observation.state": state_t,
+                        "observation.language.tokens": input_ids,
+                        "observation.language.attention_mask": attention_mask.bool(),
+                        "observation.language_tokens": input_ids,
+                        "observation.language_attention_mask": attention_mask.bool(),
+                    }
+                    with torch.no_grad():
                         action_tensor = policy.select_action(batch)
                 else:
-                    action_tensor = policy.select_action(batch)
+                    batch = {
+                        "image_front": img_tensor,
+                        "image_wrist": wrist_tensor,
+                        "input_ids": input_ids,
+                        "attention_mask": attention_mask,
+                    }
+                    if use_amp:
+                        with torch.autocast(device_type="cuda", dtype=amp_dtype):
+                            action_tensor = policy.select_action(batch)
+                    else:
+                        action_tensor = policy.select_action(batch)
 
-                action_np = action_tensor.cpu().numpy()
+                if isinstance(action_tensor, torch.Tensor):
+                    action_np = action_tensor.squeeze().cpu().numpy()
+                else:
+                    action_np = np.array(action_tensor)
+                if action_np.ndim > 1:
+                    action_np = action_np.squeeze(0)
                 action_np = np.clip(action_np, -1.0, 1.0)
                 recorded_actions.append(action_np.copy())
                 if ee_pos is not None:
                     trajectory_ee_pos.append(ee_pos.copy())
 
-                # Robust closed-loop manipulation: approach, clamp lock, lift, transit, and delivery
+                # Physics-grounded manipulation telemetry & optional assistance
                 is_bowl_task = (b_site_id is not None and bowl_pos is not None)
                 ref_z = bowl_start_z if bowl_start_z is not None else 0.898
                 in_mid_air = False
 
-                if is_bowl_task:
+                if not pure_policy and is_bowl_task:
+                    # Assisted Mode: Centering targets true object centroid (norm_xy -> 0.0), never drags ungrasped objects
                     if not has_grasped:
-                        # Approach Phase: Descent & horizontal centering directly toward the rim
-                        # Table is at ref_z. Rim is at ref_z + 0.040. We want fingertips deep: ee_z <= ref_z + 0.015.
-                        if ee_z is not None and ee_z > (ref_z + 0.014):
+                        # Approach Phase: Descent & horizontal centering directly toward object centroid
+                        if ee_z is not None and ee_z > (ref_z + 0.015):
                             action_np[2] = min(-0.25, float(action_np[2]))
                         else:
                             action_np[2] = min(0.0, float(action_np[2]))
 
-                        # Horizontal rim alignment: rim is at radius ~0.045m
+                        # True Centroid Alignment: aim for center (0.0 cm offset)
                         if dist_xy_ee_bowl is not None and ee_pos is not None:
                             delta_xy = bowl_pos[:2] - ee_pos[:2]
                             norm_xy = float(np.linalg.norm(delta_xy))
-                            if norm_xy > 0.052:  # Further out than rim
+                            if norm_xy > 0.020:
                                 unit_xy = delta_xy / norm_xy
-                                centering_gain = min(0.28, (norm_xy - 0.045) * 1.5)
-                                action_np[0] = float(np.clip(action_np[0] * 0.65 + unit_xy[0] * centering_gain, -0.35, 0.35))
-                                action_np[1] = float(np.clip(action_np[1] * 0.65 + unit_xy[1] * centering_gain, -0.35, 0.35))
+                                centering_gain = min(0.25, norm_xy * 1.5)
+                                action_np[0] = float(np.clip(action_np[0] * 0.65 + unit_xy[0] * centering_gain, -0.30, 0.30))
+                                action_np[1] = float(np.clip(action_np[1] * 0.65 + unit_xy[1] * centering_gain, -0.30, 0.30))
 
-                        # Proximity approach guard: prevent premature mid-air grasping BEFORE reaching rim depth
-                        # Finger pads must be at rim radius (<= 5.2 cm) AND sunk deep enough (ee_z <= ref_z + 0.020)
-                        is_at_rim = False
-                        if dist_xy_ee_bowl is not None and ee_z is not None:
-                            is_at_rim = (dist_xy_ee_bowl <= 5.2 and ee_z <= (ref_z + 0.020))
-                        elif dist_ee_bowl is not None:
-                            is_at_rim = (dist_ee_bowl <= 5.5)
-
-                        if proximity_guard:
-                            if not is_at_rim:
-                                action_np[6] = -1.0
-                                if policy.gripper_controller is not None:
-                                    policy.gripper_controller.current_state = policy.gripper_controller.open_val
-                                    policy.gripper_controller.steps_in_state = 10
-                                in_mid_air = True
-                            elif min_approach_steps > 0 and step < min_approach_steps:
-                                action_np[6] = -1.0
-                                if policy.gripper_controller is not None:
-                                    policy.gripper_controller.current_state = policy.gripper_controller.open_val
-                                    policy.gripper_controller.steps_in_state = 10
-                                in_mid_air = True
-
-                        # Commit firmly to grasp when centered over rim and descended deep
-                        if is_at_rim and step >= 30:
+                        # Proximity guard: only clamp when centered and at grasp depth
+                        is_at_obj = (dist_xy_ee_bowl is not None and dist_xy_ee_bowl <= 5.0 and ee_z is not None and ee_z <= (ref_z + 0.020))
+                        if proximity_guard and not is_at_obj:
+                            action_np[6] = -1.0
+                            if hasattr(policy, "gripper_controller") and policy.gripper_controller is not None:
+                                policy.gripper_controller.current_state = policy.gripper_controller.open_val
+                                policy.gripper_controller.steps_in_state = 10
+                            in_mid_air = True
+                        elif is_at_obj and step >= 30:
                             action_np[6] = 1.0
 
                     else:
-                        # Carry & Delivery Phase: LOCKED CLAMP during entire transport
+                        # Carry Phase
                         action_np[6] = 1.0
-                        if policy.gripper_controller is not None:
+                        if hasattr(policy, "gripper_controller") and policy.gripper_controller is not None:
                             policy.gripper_controller.current_state = policy.gripper_controller.close_val
 
-                        # Smooth Active Lift (NO JERK): lift gently with +0.10 to +0.16 until clear of table
+                        # Smooth Active Lift
                         if lift_steps < 35 and (bowl_z is None or bowl_z < (ref_z + 0.040)):
                             lift_steps += 1
                             action_np[2] = max(0.10, min(0.16, float(action_np[2])))
                         elif ee_z is not None and ee_z < (ref_z + 0.050):
                             action_np[2] = max(0.08, float(action_np[2]))
 
-                        # Smooth Closed-Loop Transport: guide horizontal motion gently toward plate
-                        if plate_pos is not None and bowl_pos is not None:
+                        # CRITICAL: ONLY transport horizontally if object is CONFIRMED LIFTED off table!
+                        if bowl_lifted and plate_pos is not None and bowl_pos is not None:
                             delta_p = plate_pos[:2] - bowl_pos[:2]
                             norm_p = float(np.linalg.norm(delta_p))
                             if norm_p > 1e-4:
@@ -719,12 +769,18 @@ def run_closed_loop_evaluation(
                                 action_np[0] = float(np.clip(action_np[0] * 0.70 + unit_p[0] * p_gain, -0.25, 0.25))
                                 action_np[1] = float(np.clip(action_np[1] * 0.70 + unit_p[1] * p_gain, -0.25, 0.25))
 
+                        # If grasp missed or unlifted, DO NOT bulldoze/drag table! Hover above cleanly.
+                        if not bowl_lifted and lift_steps >= 25:
+                            action_np[0] = 0.0
+                            action_np[1] = 0.0
+                            action_np[2] = 0.05  # Hover safely above object
+
                         # Delivery Phase: lower into plate and release
-                        if dist_bowl_plate is not None and dist_bowl_plate <= 5.0:
+                        if bowl_lifted and dist_bowl_plate is not None and dist_bowl_plate <= 5.0:
                             action_np[2] = -0.12
                             if (bowl_z is not None and bowl_z <= (ref_z + 0.025)) or (ee_z is not None and ee_z <= (ref_z + 0.030)) or step > 220:
                                 action_np[6] = -1.0
-                                if policy.gripper_controller is not None:
+                                if hasattr(policy, "gripper_controller") and policy.gripper_controller is not None:
                                     policy.gripper_controller.current_state = policy.gripper_controller.open_val
                                     policy.gripper_controller.min_hold_steps = 0
                                 released_after_transport = True
@@ -1050,9 +1106,22 @@ def main():
                         help="Evaluate single specific task index (0-9) instead of all")
     parser.add_argument("--output_json", type=str, default="results/closed_loop_simulation_results.json",
                         help="Path to save simulation metrics JSON")
+    parser.add_argument("--policy_type", type=str, default="vga", choices=["vga", "smolvla"],
+                        help="Policy architecture to evaluate: 'vga' or 'smolvla' (default: vga)")
+    parser.add_argument("--smolvla", dest="policy_type", action="store_const", const="smolvla",
+                        help="Convenience flag to evaluate SmolVLA-450M baseline")
+    parser.add_argument("--pure_policy", dest="pure_policy", action="store_true", default=True,
+                        help="Evaluate pure neural network policy without artificial heuristic overrides (default: True)")
+    parser.add_argument("--assist", dest="pure_policy", action="store_false",
+                        help="Enable heuristic assistance (guidance, descent settle, proximity guard)")
+    parser.add_argument("--n_action_steps", type=int, default=10,
+                        help="Action execution steps per chunk before replanning (default: 10, recommended for SmolVLA)")
     args = parser.parse_args()
 
-    ckpt_resolved = resolve_file(args.checkpoint) or "checkpoints/vga_libero_10shot.pt"
+    if args.policy_type == "smolvla" and args.checkpoint == "checkpoints/vga_libero_10shot.pt":
+        ckpt_resolved = "lerobot/smolvla_libero"
+    else:
+        ckpt_resolved = resolve_file(args.checkpoint) or args.checkpoint
     stats_resolved = resolve_file(args.stats_path) or "configs/action_stats.json"
 
     if args.task_id is not None:
@@ -1082,6 +1151,9 @@ def main():
         flip_image=args.flip_image,
         grasp_dist_thresh=args.grasp_dist_thresh,
         proximity_guard=args.proximity_guard,
+        policy_type=args.policy_type,
+        pure_policy=args.pure_policy,
+        n_action_steps=args.n_action_steps,
     )
 
 

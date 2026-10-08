@@ -42,13 +42,14 @@ except ImportError:
 # Namespace bypass for experimental lerobot policies
 try:
     import lerobot
-    policies_dir = pathlib.Path(lerobot.__file__).parent / "policies"
-    if policies_dir.exists():
-        dummy_policies = types.ModuleType("lerobot.policies")
-        dummy_policies.__path__ = [str(policies_dir)]
-        dummy_policies.__file__ = str(policies_dir / "__init__.py")
-        sys.modules["lerobot.policies"] = dummy_policies
-except ImportError:
+    if hasattr(lerobot, "__file__") and lerobot.__file__:
+        policies_dir = pathlib.Path(lerobot.__file__).parent / "policies"
+        if policies_dir.exists():
+            dummy_policies = types.ModuleType("lerobot.policies")
+            dummy_policies.__path__ = [str(policies_dir)]
+            dummy_policies.__file__ = str(policies_dir / "__init__.py")
+            sys.modules["lerobot.policies"] = dummy_policies
+except Exception:
     pass
 
 

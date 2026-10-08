@@ -42,6 +42,21 @@ from data.dataset import LiberoSpatialDataset, Normalizer
 from models.vga_policy import VGAPolicy
 
 
+def get_libero_suite(suite_name: str = "libero_spatial"):
+    """Safely retrieves a LIBERO benchmark suite instance across LeRobot and standalone LIBERO."""
+    try:
+        from lerobot.envs.libero import _get_suite
+        return _get_suite(suite_name)
+    except Exception:
+        pass
+    try:
+        import libero.libero.benchmark as bm
+        return bm.get_benchmark_dict()[suite_name]()
+    except Exception:
+        pass
+    return None
+
+
 def train_vga(
     shots: int = 10,
     batch_size: int = 16,
@@ -91,21 +106,26 @@ def train_vga(
         target_tasks = ["all"]
         task_label = "All 10 Tasks (Multi-Task Benchmark)"
     else:
-        libero_tasks = [
-            "pick up the black bowl between the plate and the ramekin and place it on the plate",
-            "pick up the black bowl next to the ramekin and place it on the plate",
-            "pick up the black bowl from table center and place it on the plate",
-            "pick up the black bowl on the ramekin and place it on the plate",
-            "pick up the black bowl in the top drawer of the wooden cabinet and place it on the plate",
-            "pick up the black bowl on the stove and place it on the plate",
-            "pick up the black bowl next to the cookie box and place it on the plate",
-            "pick up the black bowl on the cookie box and place it on the plate",
-            "pick up the black bowl next to the plate and place it on the plate",
-            "pick up the black bowl on the wooden cabinet and place it on the plate",
-        ]
-        target_task_str = libero_tasks[task_id] if task_id < len(libero_tasks) else libero_tasks[0]
+        suite = get_libero_suite("libero_spatial")
+        if suite is not None and task_id < len(suite.tasks):
+            target_task_str = suite.get_task(task_id).language
+        else:
+            libero_tasks = [
+                "pick up the black bowl between the plate and the ramekin and place it on the plate",
+                "pick up the black bowl next to the ramekin and place it on the plate",
+                "pick up the black bowl from table center and place it on the plate",
+                "pick up the black bowl on the ramekin and place it on the plate",
+                "pick up the black bowl in the top drawer of the wooden cabinet and place it on the plate",
+                "pick up the black bowl on the stove and place it on the plate",
+                "pick up the black bowl next to the cookie box and place it on the plate",
+                "pick up the black bowl on the cookie box and place it on the plate",
+                "pick up the black bowl next to the plate and place it on the plate",
+                "pick up the black bowl on the wooden cabinet and place it on the plate",
+            ]
+            target_task_str = libero_tasks[task_id] if task_id < len(libero_tasks) else libero_tasks[0]
         target_tasks = [target_task_str]
         task_label = f"Task {task_id} ('{target_task_str}')"
+
 
     if is_main_process:
         print(f"Benchmark Target: {task_label} ({shots} demonstrations)")
@@ -378,14 +398,20 @@ if __name__ == "__main__":
     parser.add_argument("--in_memory", action=argparse.BooleanOptionalAction, default=True, help="Cache few-shot demos in RAM for zero disk-I/O overhead")
     args = parser.parse_args()
 
-    train_vga(
-        shots=args.shots,
-        num_steps=args.steps,
-        batch_size=args.batch_size,
-        lr=args.lr,
-        task_id=args.task_id,
-        all_tasks=args.all_tasks,
-        output_dir=args.output_dir,
-        stats_path=args.stats_path,
-        in_memory=args.in_memory,
-    )
+    try:
+        train_vga(
+            shots=args.shots,
+            num_steps=args.steps,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            task_id=args.task_id,
+            all_tasks=args.all_tasks,
+            output_dir=args.output_dir,
+            stats_path=args.stats_path,
+            in_memory=args.in_memory,
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(1)
+

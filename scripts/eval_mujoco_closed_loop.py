@@ -125,6 +125,38 @@ except Exception:
 from data.dataset import Normalizer
 from models.vga_policy import VGAPolicy
 
+LiberoEnv = None
+_get_suite = None
+
+try:
+    from lerobot.envs.libero import LiberoEnv as _LEnv, _get_suite as _LSuite
+    LiberoEnv = _LEnv
+    _get_suite = _LSuite
+except ImportError:
+    pass
+
+
+def get_libero_suite(suite_name: str = "libero_spatial"):
+    """Safely retrieves a LIBERO benchmark suite instance across LeRobot and standalone LIBERO."""
+    global _get_suite
+    if _get_suite is not None:
+        try:
+            return _get_suite(suite_name)
+        except Exception:
+            pass
+    try:
+        from lerobot.envs.libero import _get_suite as lerobot_get_suite
+        _get_suite = lerobot_get_suite
+        return lerobot_get_suite(suite_name)
+    except Exception:
+        pass
+    try:
+        import libero.libero.benchmark as bm
+        return bm.get_benchmark_dict()[suite_name]()
+    except Exception:
+        pass
+    return None
+
 
 def resolve_file(path_str: Optional[str]) -> Optional[str]:
     if not path_str:
@@ -482,6 +514,7 @@ def run_closed_loop_evaluation(
     pure_policy: bool = True,
     n_action_steps: int = 10,
     camera_perturbation: bool = False,
+    target_task_id: Optional[int] = None,
 ):
     is_smolvla = (policy_type.lower() == "smolvla" or "smolvla" in str(checkpoint_path).lower())
     banner_name = "SmolVLA-450M Baseline" if is_smolvla else "VGA PoC"
@@ -493,15 +526,19 @@ def run_closed_loop_evaluation(
     print(f"Execution Mode:   {'PURE NEURAL POLICY (No heuristic steering)' if pure_policy else 'ASSISTED / HEURISTIC'}")
 
     # 1. Check for LIBERO simulation dependencies
-    try:
-        from lerobot.envs.libero import LiberoEnv, _get_suite
-    except ImportError as e:
-        print("\n❌ ERROR: LIBERO simulation environment is not installed!")
-        print("To run live MuJoCo simulation on Kaggle, install dependencies with:")
-        print("  !apt-get update -qq && apt-get install -y -qq libgl1-mesa-glx libosmesa6-dev")
-        print("  !pip install -q 'hf-libero>=0.1.4' imageio[ffmpeg]")
-        print(f"Detailed import error: {e}")
-        return
+    global LiberoEnv, _get_suite
+    if LiberoEnv is None:
+        try:
+            from lerobot.envs.libero import LiberoEnv as _LEnv, _get_suite as _LSuite
+            LiberoEnv = _LEnv
+            _get_suite = _LSuite
+        except ImportError as e:
+            print("\n❌ ERROR: LIBERO simulation environment is not installed!")
+            print("To run live MuJoCo simulation on Kaggle, install dependencies with:")
+            print("  !apt-get update -qq && apt-get install -y -qq libgl1-mesa-glx libosmesa6-dev")
+            print("  !pip install -q 'hf-libero>=0.1.4' imageio[ffmpeg]")
+            print(f"Detailed import error: {e}")
+            return
 
     try:
         import imageio
@@ -567,13 +604,17 @@ def run_closed_loop_evaluation(
 
     # 3. Instantiate Benchmark Suite
     print("\n--- Initializing LIBERO-Spatial Suite ---")
-    suite = _get_suite("libero_spatial")
+    suite = get_libero_suite("libero_spatial")
+    if suite is None:
+        raise RuntimeError("Failed to load LIBERO-Spatial suite. Check libero / lerobot installation.")
     total_suite_tasks = len(suite.tasks)
     print(f"LIBERO-Spatial Suite loaded: {total_suite_tasks} tasks available.")
 
     # Find task indices matching our target tasks (or all 10 tasks in suite if 'all')
     matched_task_indices = []
-    if target_tasks is None or len(target_tasks) == 0 or "all" in [str(t).lower() for t in target_tasks]:
+    if target_task_id is not None and target_task_id < total_suite_tasks:
+        matched_task_indices = [(target_task_id, suite.get_task(target_task_id).language)]
+    elif target_tasks is None or len(target_tasks) == 0 or "all" in [str(t).lower() for t in target_tasks]:
         matched_task_indices = [(i, suite.get_task(i).language) for i in range(total_suite_tasks)]
     else:
         for target in target_tasks:
@@ -588,6 +629,7 @@ def run_closed_loop_evaluation(
                     break
             if not matched:
                 print(f"Notice: Could not match exact task '{target}' in suite.")
+
 
     if not matched_task_indices:
         print(f"Evaluating all {total_suite_tasks} tasks in LIBERO-Spatial suite.")
@@ -1258,11 +1300,14 @@ def main():
         ckpt_resolved = "lerobot/smolvla_libero"
     else:
         ckpt_resolved = resolve_file(args.checkpoint) or args.checkpoint
-    stats_resolved = resolve_file(args.stats_path) or "configs/action_stats.json"
+    stats_resolved = resolve_file(args.stats_path) or os.path.join(str(root_dir), "configs", "action_stats.json")
 
+    suite_tmp = get_libero_suite("libero_spatial")
     if args.task_id is not None:
-        suite_tmp = _get_suite("libero_spatial")
-        target_tasks = [suite_tmp.get_task(args.task_id).language] if args.task_id < len(suite_tmp.tasks) else ["all"]
+        if suite_tmp is not None and args.task_id < len(suite_tmp.tasks):
+            target_tasks = [suite_tmp.get_task(args.task_id).language]
+        else:
+            target_tasks = [f"task_{args.task_id}"]
     elif args.all_tasks:
         target_tasks = ["all"]
     else:
@@ -1272,6 +1317,7 @@ def main():
         checkpoint_path=ckpt_resolved,
         stats_path=stats_resolved,
         target_tasks=target_tasks,
+        target_task_id=args.task_id,
         num_episodes_per_task=args.num_episodes,
         max_steps_per_episode=args.max_steps,
         device=args.device,
@@ -1295,4 +1341,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(1)
+

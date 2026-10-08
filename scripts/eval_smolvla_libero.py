@@ -52,6 +52,38 @@ try:
 except Exception:
     pass
 
+LiberoEnv = None
+_get_suite = None
+
+try:
+    from lerobot.envs.libero import LiberoEnv as _LEnv, _get_suite as _LSuite
+    LiberoEnv = _LEnv
+    _get_suite = _LSuite
+except ImportError:
+    pass
+
+
+def get_libero_suite(suite_name: str = "libero_spatial"):
+    """Safely retrieves a LIBERO benchmark suite instance across LeRobot and standalone LIBERO."""
+    global _get_suite
+    if _get_suite is not None:
+        try:
+            return _get_suite(suite_name)
+        except Exception:
+            pass
+    try:
+        from lerobot.envs.libero import _get_suite as lerobot_get_suite
+        _get_suite = lerobot_get_suite
+        return lerobot_get_suite(suite_name)
+    except Exception:
+        pass
+    try:
+        import libero.libero.benchmark as bm
+        return bm.get_benchmark_dict()[suite_name]()
+    except Exception:
+        pass
+    return None
+
 
 def composite_wrist_inset(
     front_img: np.ndarray,
@@ -521,7 +553,7 @@ def run_smolvla_evaluation(
                     comp_frame = render_research_frame(
                         front_img=img_front_np,
                         wrist_img=img_wrist_np,
-                        task_desc=task_lang,
+                        task_desc=task_desc,
                         task_id=task_id,
                         ep_idx=ep,
                         shots=10,
@@ -533,6 +565,26 @@ def run_smolvla_evaluation(
 
                 # Extract canonical 8D robot state: [x, y, z, rx, ry, rz, g1, g2]
                 state_8d = extract_8d_robot_state(env)
+
+                # 3D spatial geometry query for physical telemetry
+                dist_ee_bowl, dist_xy_ee_bowl, dist_bowl_plate, bowl_z, ee_z = None, None, None, None, None
+                ee_pos, bowl_pos, plate_pos = None, None, None
+                if sim is not None and hasattr(sim, "data"):
+                    if g_site_id is not None and g_site_id >= 0:
+                        ee_pos = sim.data.site_xpos[g_site_id]
+                        ee_z = float(ee_pos[2])
+                    if b_site_id is not None and b_site_id >= 0:
+                        bowl_pos = sim.data.site_xpos[b_site_id]
+                        bowl_z = float(bowl_pos[2])
+                        if bowl_start_z is None:
+                            bowl_start_z = bowl_z
+                    if p_site_id is not None and p_site_id >= 0:
+                        plate_pos = sim.data.site_xpos[p_site_id]
+                    if g_site_id is not None and b_site_id is not None and g_site_id >= 0 and b_site_id >= 0:
+                        dist_ee_bowl = float(np.linalg.norm(ee_pos - bowl_pos) * 100.0)
+                        dist_xy_ee_bowl = float(np.linalg.norm(ee_pos[:2] - bowl_pos[:2]) * 100.0)
+                    if b_site_id is not None and plate_pos is not None and b_site_id >= 0:
+                        dist_bowl_plate = float(np.linalg.norm(bowl_pos[:2] - plate_pos[:2]) * 100.0)
 
                 # Pure Neural Action Selection via SmolVLA (with proper normalization / unnormalization)
                 if preprocessor is not None and postprocessor is not None:
@@ -628,7 +680,7 @@ def run_smolvla_evaluation(
                         succ_frame = render_research_frame(
                             front_img=img_front_np,
                             wrist_img=img_wrist_np,
-                            task_desc=task_lang,
+                            task_desc=task_desc,
                             task_id=task_id,
                             ep_idx=ep,
                             shots=10,
@@ -638,6 +690,7 @@ def run_smolvla_evaluation(
                         )
                         for _ in range(25):  # 1.25s hold banner at 20 Hz
                             video_frames.append(succ_frame)
+
                     break
 
                 if terminated or truncated:
@@ -761,11 +814,10 @@ def main():
 
     args = parser.parse_args()
 
-    from lerobot.envs.libero import _get_suite
-    suite_tmp = _get_suite("libero_spatial")
-    if args.task_id is not None and args.task_id < len(suite_tmp.tasks):
+    suite_tmp = get_libero_suite("libero_spatial")
+    if args.task_id is not None and suite_tmp is not None and args.task_id < len(suite_tmp.tasks):
         target_tasks = [suite_tmp.get_task(args.task_id).language]
-    elif args.all_tasks:
+    elif args.all_tasks or suite_tmp is None:
         target_tasks = ["all"]
     else:
         target_tasks = [suite_tmp.get_task(0).language]
@@ -786,4 +838,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(1)
+

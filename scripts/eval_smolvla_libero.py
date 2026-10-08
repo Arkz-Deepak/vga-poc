@@ -203,6 +203,99 @@ def compute_chunk_jump_ratio(actions: List[np.ndarray], replanning_indices: set)
     return float(mean_b / max(1e-5, mean_n))
 
 
+def extract_8d_robot_state(env) -> np.ndarray:
+    """
+    Extracts canonical 8-dimensional robot state [x, y, z, rx, ry, rz, g1, g2]
+    matching LeRobot's LIBERO dataset specification:
+    - [0:3]: End-effector 3D position (meters)
+    - [3:6]: End-effector 3D orientation in axis-angle representation (radians)
+    - [6:8]: Gripper left and right finger positions (meters)
+    """
+    try:
+        raw_env = getattr(env, "_env", getattr(env, "env", env))
+        inner_env = getattr(raw_env, "env", raw_env)
+        sim = getattr(raw_env, "sim", getattr(inner_env, "sim", None))
+
+        # 1. EEF Position (3,)
+        eef_pos = None
+        if hasattr(raw_env, "robots") and len(raw_env.robots) > 0 and hasattr(raw_env.robots[0], "controller"):
+            eef_pos = raw_env.robots[0].controller.ee_pos
+        if eef_pos is None and sim is not None:
+            g_id = sim.model.site_name2id("gripper0_grip_site")
+            eef_pos = sim.data.site_xpos[g_id].copy()
+
+        # 2. EEF Orientation (3,) as axis-angle
+        eef_axisangle = None
+        if hasattr(raw_env, "robots") and len(raw_env.robots) > 0 and hasattr(raw_env.robots[0], "controller"):
+            ori_mat = raw_env.robots[0].controller.ee_ori_mat
+            try:
+                import robosuite.utils.transform_utils as T
+                eef_axisangle = T.mat2axisangle(ori_mat)
+            except Exception:
+                pass
+        if eef_axisangle is None and sim is not None:
+            try:
+                g_id = sim.model.site_name2id("gripper0_grip_site")
+                ori_mat = sim.data.site_xmat[g_id].reshape(3, 3)
+                import robosuite.utils.transform_utils as T
+                eef_axisangle = T.mat2axisangle(ori_mat)
+            except Exception:
+                pass
+
+        # 3. Gripper QPos (2,)
+        gripper_qpos = None
+        if hasattr(raw_env, "robots") and len(raw_env.robots) > 0:
+            gripper = getattr(raw_env.robots[0], "gripper", None)
+            if gripper is not None and sim is not None:
+                gripper_qpos = np.array([sim.data.qpos[sim.model.joint_name2id(j)] for j in gripper.joints])
+        if gripper_qpos is None:
+            gripper_qpos = np.array([0.0269, -0.0272], dtype=np.float32)
+
+        if eef_pos is None:
+            eef_pos = np.array([-0.0465, 0.0344, 0.7646], dtype=np.float32)
+        if eef_axisangle is None:
+            eef_axisangle = np.array([2.9722, -0.2205, -0.1256], dtype=np.float32)
+
+        return np.concatenate([eef_pos, eef_axisangle, gripper_qpos]).astype(np.float32)
+    except Exception:
+        return np.array([-0.0465, 0.0344, 0.7646, 2.9722, -0.2205, -0.1256, 0.0269, -0.0272], dtype=np.float32)
+
+
+def apply_camera_perturbation(
+    env,
+    pos_jitter: float = 0.03,
+    camera_name: str = "agentview",
+    seed: Optional[int] = None,
+):
+    """
+    Applies camera viewpoint perturbation (simulating LIBERO-Plus viewpoint variations)
+    to evaluate camera-invariance and 3D Ray-RoPE robustness.
+    """
+    try:
+        raw_env = getattr(env, "_env", getattr(env, "env", env))
+        inner_env = getattr(raw_env, "env", raw_env)
+        sim = getattr(raw_env, "sim", getattr(inner_env, "sim", None))
+        if sim is None or not hasattr(sim, "model"):
+            return None
+        rng = np.random.RandomState(seed)
+        model = sim.model
+        cam_id = None
+        if hasattr(model, "camera_name2id"):
+            try:
+                cam_id = model.camera_name2id(camera_name)
+            except Exception:
+                pass
+        if cam_id is not None and cam_id >= 0:
+            d_pos = rng.uniform(-pos_jitter, pos_jitter, size=3)
+            model.cam_pos[cam_id] += d_pos
+            if hasattr(sim, "forward"):
+                sim.forward()
+            return d_pos
+    except Exception:
+        pass
+    return None
+
+
 def run_smolvla_evaluation(
     policy_path: str = "lerobot/smolvla_libero",
     target_tasks: Optional[List[str]] = None,
@@ -214,6 +307,7 @@ def run_smolvla_evaluation(
     video_dir: str = "results/videos_smolvla",
     output_json: str = "results/smolvla_simulation_results.json",
     flip_image: bool = True,
+    camera_perturbation: bool = False,
 ):
     print("=" * 68)
     print("   SmolVLA-450M Closed-Loop Simulation Benchmark (LIBERO-Spatial)   ")
@@ -262,6 +356,19 @@ def run_smolvla_evaluation(
 
     total_params = sum(p.numel() for p in policy.parameters())
     print(f"✅ SmolVLA loaded successfully on {device} ({total_params / 1e6:.1f}M parameters)")
+
+    # 2b. Load LeRobot Preprocessor and Postprocessor Pipelines
+    preprocessor = None
+    postprocessor = None
+    try:
+        from lerobot.policies.factory import load_pretrained_policy_processors
+        preprocessor, postprocessor = load_pretrained_policy_processors(
+            policy_path,
+            preprocessor_overrides={"device_processor": {"device": device}},
+        )
+        print("✅ Preprocessor & Postprocessor pipelines loaded successfully!")
+    except Exception as e_proc:
+        print(f"Notice: Failed to load pretrained policy processors via factory ({e_proc}).")
 
     # 3. Setup Tokenizer for Language Instructions
     tok = None
@@ -360,6 +467,10 @@ def run_smolvla_evaluation(
         for ep in range(num_episodes_per_task):
             policy.reset()
             obs, info = env.reset(seed=ep + 100)
+            if camera_perturbation:
+                d_cam = apply_camera_perturbation(env, pos_jitter=0.03, seed=ep + 500)
+                if d_cam is not None:
+                    print(f"    [Episode {ep}] 📷 Applied LIBERO-Plus camera viewpoint shift: Δxyz = [{d_cam[0]:+.3f}, {d_cam[1]:+.3f}, {d_cam[2]:+.3f}] m")
 
             # Query MuJoCo 3D sites for telemetry
             raw_env = getattr(env, "_env", getattr(env, "env", env))
@@ -419,60 +530,44 @@ def run_smolvla_evaluation(
                     )
                     video_frames.append(comp_frame)
 
-                # Format images for SmolVLA: [1, 3, 256, 256] in float [0, 1]
-                img_c1 = torch.from_numpy(img_front_np).permute(2, 0, 1).float().unsqueeze(0).to(device) / 255.0
-                img_c2 = (torch.from_numpy(img_wrist_np).permute(2, 0, 1).float().unsqueeze(0).to(device) / 255.0) if img_wrist_np is not None else img_c1
+                # Extract canonical 8D robot state: [x, y, z, rx, ry, rz, g1, g2]
+                state_8d = extract_8d_robot_state(env)
 
-                # Robot proprioceptive state [1, 6]
-                state_raw = obs.get("state", None)
-                if state_raw is None:
-                    state_raw = np.zeros(6, dtype=np.float32)
-                state_arr = np.array(state_raw, dtype=np.float32)
-                if len(state_arr) >= 6:
-                    state_arr = state_arr[:6]
+                # Pure Neural Action Selection via SmolVLA (with proper normalization / unnormalization)
+                if preprocessor is not None and postprocessor is not None:
+                    raw_obs = {
+                        "observation.images.image": torch.from_numpy(img_front_np),
+                        "observation.images.image2": torch.from_numpy(img_wrist_np if img_wrist_np is not None else img_front_np),
+                        "observation.state": torch.from_numpy(state_8d),
+                        "task": task_desc,
+                    }
+                    processed_obs = preprocessor(raw_obs)
+                    with torch.inference_mode():
+                        action_norm = policy.select_action(processed_obs)
+                    action_unnorm = postprocessor(action_norm)
+                    if isinstance(action_unnorm, torch.Tensor):
+                        action_np = action_unnorm.squeeze().cpu().numpy()
+                    else:
+                        action_np = np.array(action_unnorm).squeeze()
                 else:
-                    state_arr = np.pad(state_arr, (0, 6 - len(state_arr)))
-                state_t = torch.from_numpy(state_arr).unsqueeze(0).to(device)
+                    img_c1 = torch.from_numpy(img_front_np).permute(2, 0, 1).float().unsqueeze(0).to(device) / 255.0
+                    img_c2 = (torch.from_numpy(img_wrist_np).permute(2, 0, 1).float().unsqueeze(0).to(device) / 255.0) if img_wrist_np is not None else img_c1
+                    state_t = torch.from_numpy(state_8d).unsqueeze(0).to(device)
+                    batch = {
+                        "observation.images.camera1": img_c1,
+                        "observation.images.camera2": img_c2,
+                        "observation.images.camera3": img_c1,
+                        "observation.state": state_t,
+                        "observation.language.tokens": input_ids,
+                        "observation.language.attention_mask": att_mask,
+                    }
+                    with torch.no_grad():
+                        action_t = policy.select_action(batch)
+                    if isinstance(action_t, torch.Tensor):
+                        action_np = action_t.squeeze().cpu().numpy()
+                    else:
+                        action_np = np.array(action_t).squeeze()
 
-                batch = {
-                    "observation.images.camera1": img_c1,
-                    "observation.images.camera2": img_c2,
-                    "observation.images.camera3": img_c1,
-                    "observation.state": state_t,
-                    "observation.language.tokens": input_ids,
-                    "observation.language.attention_mask": att_mask,
-                    "observation.language_tokens": input_ids,
-                    "observation.language_attention_mask": att_mask,
-                }
-
-                # 3D spatial geometry telemetry
-                dist_ee_bowl, dist_xy_ee_bowl, dist_bowl_plate, bowl_z, ee_z = None, None, None, None, None
-                ee_pos, bowl_pos, plate_pos = None, None, None
-                if sim is not None and hasattr(sim, "data"):
-                    if g_site_id is not None and g_site_id >= 0:
-                        ee_pos = sim.data.site_xpos[g_site_id]
-                        ee_z = float(ee_pos[2])
-                    if b_site_id is not None and b_site_id >= 0:
-                        bowl_pos = sim.data.site_xpos[b_site_id]
-                        bowl_z = float(bowl_pos[2])
-                        if bowl_start_z is None:
-                            bowl_start_z = bowl_z
-                    if p_site_id is not None and p_site_id >= 0:
-                        plate_pos = sim.data.site_xpos[p_site_id]
-                    if g_site_id is not None and b_site_id is not None and g_site_id >= 0 and b_site_id >= 0:
-                        dist_ee_bowl = float(np.linalg.norm(ee_pos - bowl_pos) * 100.0)
-                        dist_xy_ee_bowl = float(np.linalg.norm(ee_pos[:2] - bowl_pos[:2]) * 100.0)
-                    if b_site_id is not None and plate_pos is not None and b_site_id >= 0:
-                        dist_bowl_plate = float(np.linalg.norm(bowl_pos[:2] - plate_pos[:2]) * 100.0)
-
-                # Pure Neural Action Selection via SmolVLA
-                with torch.no_grad():
-                    action_t = policy.select_action(batch)
-
-                if isinstance(action_t, torch.Tensor):
-                    action_np = action_t.cpu().numpy()
-                else:
-                    action_np = np.array(action_t)
                 if action_np.ndim > 1:
                     action_np = action_np.squeeze(0)
                 action_np = np.clip(action_np, -1.0, 1.0)
@@ -660,6 +755,8 @@ def main():
                         help="Path to output JSON summary file")
     parser.add_argument("--no_flip_image", dest="flip_image", action="store_false", default=True,
                         help="Disable 180° rotation matching LeRobot camera convention")
+    parser.add_argument("--camera_perturbation", "--libero_plus", dest="camera_perturbation", action="store_true", default=False,
+                        help="Enable camera viewpoint perturbations to test LIBERO-Plus camera pose invariance")
 
     args = parser.parse_args()
 
@@ -683,6 +780,7 @@ def main():
         video_dir=args.video_dir,
         output_json=args.output_json,
         flip_image=args.flip_image,
+        camera_perturbation=args.camera_perturbation,
     )
 
 

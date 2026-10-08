@@ -262,6 +262,42 @@ def boost_gripper_friction(env, friction_val: float = 3.5) -> int:
         return 0
 
 
+def apply_camera_perturbation(
+    env,
+    pos_jitter: float = 0.03,
+    camera_name: str = "agentview",
+    seed: Optional[int] = None,
+):
+    """
+    Applies camera viewpoint perturbation (simulating LIBERO-Plus viewpoint variations)
+    to evaluate camera-invariance and 3D Ray-RoPE robustness:
+      - Adds 3D position jitter (±3 cm) to camera position.
+    """
+    try:
+        raw_env = getattr(env, "_env", getattr(env, "env", env))
+        inner_env = getattr(raw_env, "env", raw_env)
+        sim = getattr(raw_env, "sim", getattr(inner_env, "sim", None))
+        if sim is None or not hasattr(sim, "model"):
+            return None
+        rng = np.random.RandomState(seed)
+        model = sim.model
+        cam_id = None
+        if hasattr(model, "camera_name2id"):
+            try:
+                cam_id = model.camera_name2id(camera_name)
+            except Exception:
+                pass
+        if cam_id is not None and cam_id >= 0:
+            d_pos = rng.uniform(-pos_jitter, pos_jitter, size=3)
+            model.cam_pos[cam_id] += d_pos
+            if hasattr(sim, "forward"):
+                sim.forward()
+            return d_pos
+    except Exception:
+        pass
+    return None
+
+
 def composite_wrist_inset(
     front_img: np.ndarray,
     wrist_img: Optional[np.ndarray],
@@ -437,7 +473,7 @@ def run_closed_loop_evaluation(
     schmitt_high: float = 0.60,
     min_hold_steps: int = 60,
     min_approach_steps: int = 0,
-    friction_boost: float = 5.0,
+    friction_boost: float = 1.0,
     grasp_settle_steps: int = 12,
     flip_image: bool = True,
     grasp_dist_thresh: float = 5.4,
@@ -445,6 +481,7 @@ def run_closed_loop_evaluation(
     policy_type: str = "vga",
     pure_policy: bool = True,
     n_action_steps: int = 10,
+    camera_perturbation: bool = False,
 ):
     is_smolvla = (policy_type.lower() == "smolvla" or "smolvla" in str(checkpoint_path).lower())
     banner_name = "SmolVLA-450M Baseline" if is_smolvla else "VGA PoC"
@@ -627,7 +664,14 @@ def run_closed_loop_evaluation(
                 policy.gripper_controller.min_hold_steps = min_hold_steps
                 policy.gripper_controller.reset()
             obs, info = env.reset(seed=ep + 100)  # Use fixed seed for reproducibility
-            boost_gripper_friction(env, friction_val=friction_boost)
+            if camera_perturbation:
+                d_cam = apply_camera_perturbation(env, pos_jitter=0.03, seed=ep + 500)
+                if d_cam is not None:
+                    print(f"    [Episode {ep}] 📷 Applied LIBERO-Plus camera viewpoint shift: Δxyz = [{d_cam[0]:+.3f}, {d_cam[1]:+.3f}, {d_cam[2]:+.3f}] m")
+            if not pure_policy and friction_boost > 1.0:
+                boost_gripper_friction(env, friction_val=friction_boost)
+            elif pure_policy and friction_boost != 1.0:
+                print("Notice: --pure_policy is enabled; running standard unmodified MuJoCo physics (friction multiplier = 1.0x).")
 
             # Query MuJoCo 3D sites for real-time telemetry
             raw_env = getattr(env, "_env", getattr(env, "env", env))
@@ -876,8 +920,8 @@ def run_closed_loop_evaluation(
                             has_grasped = True
                             settle_counter = grasp_settle_steps
 
-                # During grasp dwell/settle: hold downward/level position so fingers firmly pinch rim before lifting
-                if is_bowl_task and settle_counter > 0 and has_grasped and not bowl_lifted:
+                # During grasp dwell/settle (assisted mode only): hold downward/level position so fingers firmly pinch rim before lifting
+                if not pure_policy and is_bowl_task and settle_counter > 0 and has_grasped and not bowl_lifted:
                     settle_counter -= 1
                     action_np[2] = -0.05
                     action_np[6] = 1.0
@@ -1176,8 +1220,8 @@ def main():
                         help="Minimum steps to keep gripper locked shut once closed (default: 60)")
     parser.add_argument("--min_approach_steps", type=int, default=0,
                         help="Number of initial steps to force gripper open during approach (default: 0, disabled)")
-    parser.add_argument("--friction_boost", type=float, default=5.0,
-                        help="Friction multiplier for gripper contact pads (default: 5.0)")
+    parser.add_argument("--friction_boost", type=float, default=1.0,
+                        help="Friction multiplier for gripper contact pads (default: 1.0, standard unmodified MuJoCo physics)")
     parser.add_argument("--grasp_settle_steps", type=int, default=12,
                         help="Steps to dwell and clamp at grasp depth before lifting (default: 12)")
     parser.add_argument("--flip_image", dest="flip_image", action="store_true", default=True,
@@ -1206,6 +1250,8 @@ def main():
                         help="Enable heuristic assistance (guidance, descent settle, proximity guard)")
     parser.add_argument("--n_action_steps", type=int, default=10,
                         help="Action execution steps per chunk before replanning (default: 10, recommended for SmolVLA)")
+    parser.add_argument("--camera_perturbation", "--libero_plus", dest="camera_perturbation", action="store_true", default=False,
+                        help="Enable camera viewpoint perturbations to test LIBERO-Plus camera pose invariance")
     args = parser.parse_args()
 
     if args.policy_type == "smolvla" and args.checkpoint == "checkpoints/vga_libero_10shot.pt":
@@ -1244,6 +1290,7 @@ def main():
         policy_type=args.policy_type,
         pure_policy=args.pure_policy,
         n_action_steps=args.n_action_steps,
+        camera_perturbation=args.camera_perturbation,
     )
 
 

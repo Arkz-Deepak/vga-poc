@@ -32,7 +32,8 @@ class SchmittTriggerGripper:
         self,
         low_thresh: float = 0.40,
         high_thresh: float = 0.60,
-        min_hold_steps: int = 60,
+        min_hold_steps: int = 15,
+        min_approach_steps: int = 15,
         open_val: float = -1.0,
         close_val: float = 1.0,
         initial_state: float = None,
@@ -41,20 +42,24 @@ class SchmittTriggerGripper:
         self.high_thresh = high_thresh
         self.initial_min_hold_steps = min_hold_steps
         self.min_hold_steps = min_hold_steps
+        self.min_approach_steps = min_approach_steps
         self.open_val = float(open_val)
         self.close_val = float(close_val)
         self.current_state = float(initial_state if initial_state is not None else open_val)
         self.steps_in_state = 0
+        self.total_steps = 0
 
     def reset(self, initial_state: float = None):
         """Resets the internal latch state and restores min_hold_steps."""
         self.current_state = float(initial_state if initial_state is not None else self.open_val)
         self.steps_in_state = 0
+        self.total_steps = 0
         self.min_hold_steps = self.initial_min_hold_steps
 
     def step(self, raw_gripper_action: Union[float, torch.Tensor]) -> float:
         """
-        Processes a single predicted gripper output with temporal debounce hold.
+        Processes a single predicted gripper output with temporal debounce hold
+        and pre-grasp approach guard.
 
         Args:
             raw_gripper_action: Continuous prediction in [-1.0, 1.0].
@@ -62,6 +67,12 @@ class SchmittTriggerGripper:
         Returns:
             Discretized stable gripper state: +1.0 (Closed) or -1.0 (Open).
         """
+        self.total_steps += 1
+        # Pre-grasp approach guard: Force gripper open during initial descent
+        if self.total_steps <= self.min_approach_steps:
+            self.current_state = self.open_val
+            self.steps_in_state = self.total_steps
+            return self.open_val
         if isinstance(raw_gripper_action, torch.Tensor):
             val = raw_gripper_action.item()
         else:

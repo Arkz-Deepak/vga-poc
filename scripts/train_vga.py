@@ -264,8 +264,9 @@ def train_vga(
         # Anneal kinematic loss weight: 0.0 -> max_lambda_kin over kinematic_anneal_steps
         curr_lambda_kin = cfg.max_lambda_kin * min(1.0, step / max(1, cfg.kinematic_anneal_steps))
 
-        # Extract prefix waypoints for smooth chunk join training
-        prefix_wp = batch.get("prefix_actions", None)
+        # Extract prefix waypoints for smooth chunk join training (only when enabled in cfg)
+        use_prefix = getattr(cfg, "use_prefix_conditioning", False)
+        prefix_wp = batch.get("prefix_actions", None) if use_prefix else None
         if prefix_wp is not None:
             prefix_wp = prefix_wp.to(device, non_blocking=True)
 
@@ -315,16 +316,16 @@ def train_vga(
     # 5. Save Checkpoint (Only on main process)
     if is_main_process:
         save_path = str(out_dir_path / f"vga_libero_{shots}shot.pt")
-        torch.save(
-            {
-                "step": step,
-                "policy_state_dict": policy_raw.state_dict(),
-                "config": cfg,
-                "shots": shots,
-            },
-            save_path,
-        )
-        print(f"\n✅ Checkpoint saved to: {save_path}")
+        ckpt_data = {
+            "step": step,
+            "policy_state_dict": policy_raw.state_dict(),
+            "config": cfg,
+            "shots": shots,
+        }
+        torch.save(ckpt_data, save_path)
+        alias_path = str(out_dir_path / "vga_libero_policy.pt")
+        torch.save(ckpt_data, alias_path)
+        print(f"\n✅ Checkpoint saved to: {save_path} (and alias {alias_path})")
 
         # 6. Benchmark Real-Time Policy Latency on GPU vs Baseline
         print("\n--- 4. Benchmarking VGA Real-Time Inference Latency ---")
@@ -388,9 +389,9 @@ def train_vga(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--shots", type=int, default=10, help="Number of demo episodes per task (default: 10)")
-    parser.add_argument("--steps", type=int, default=400, help="Number of training steps (default: 400)")
+    parser.add_argument("--steps", type=int, default=1500, help="Number of training steps (default: 1500)")
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size per GPU (default: 16)")
-    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate (default: 2e-4)")
     parser.add_argument("--task_id", type=int, default=0, help="LIBERO-Spatial task ID (default: 0). Set to -1 or use --all_tasks for all 10 tasks.")
     parser.add_argument("--all_tasks", action="store_true", help="Train on all 10 LIBERO-Spatial tasks simultaneously.")
     parser.add_argument("--output_dir", type=str, default="checkpoints", help="Output directory for checkpoints")

@@ -503,8 +503,8 @@ def run_closed_loop_evaluation(
     output_json: str = "results/closed_loop_simulation_results.json",
     schmitt_low: float = 0.40,
     schmitt_high: float = 0.60,
-    min_hold_steps: int = 60,
-    min_approach_steps: int = 0,
+    min_hold_steps: int = 15,
+    min_approach_steps: int = 15,
     friction_boost: float = 1.0,
     grasp_settle_steps: int = 12,
     flip_image: bool = True,
@@ -582,8 +582,11 @@ def run_closed_loop_evaluation(
             normalizer=normalizer,
             schmitt_low=schmitt_low,
             schmitt_high=schmitt_high,
+            min_hold_steps=min_hold_steps,
+            min_approach_steps=min_approach_steps,
         ).to(device)
         policy.gripper_controller.min_hold_steps = min_hold_steps
+        policy.gripper_controller.min_approach_steps = min_approach_steps
 
         if isinstance(ckpt, dict) and "policy_state_dict" in ckpt:
             state_dict = ckpt["policy_state_dict"]
@@ -704,6 +707,7 @@ def run_closed_loop_evaluation(
             policy.reset()
             if policy.gripper_controller is not None:
                 policy.gripper_controller.min_hold_steps = min_hold_steps
+                policy.gripper_controller.min_approach_steps = min_approach_steps
                 policy.gripper_controller.reset()
             obs, info = env.reset(seed=ep + 100)  # Use fixed seed for reproducibility
             if camera_perturbation:
@@ -1258,10 +1262,10 @@ def main():
                         help="Schmitt trigger gripper close threshold (default: 0.60)")
     parser.add_argument("--schmitt_low", type=float, default=0.40,
                         help="Schmitt trigger gripper open threshold (default: 0.40)")
-    parser.add_argument("--min_hold_steps", type=int, default=60,
-                        help="Minimum steps to keep gripper locked shut once closed (default: 60)")
-    parser.add_argument("--min_approach_steps", type=int, default=0,
-                        help="Number of initial steps to force gripper open during approach (default: 0, disabled)")
+    parser.add_argument("--min_hold_steps", type=int, default=15,
+                        help="Minimum steps to keep gripper locked shut once closed (default: 15)")
+    parser.add_argument("--min_approach_steps", type=int, default=15,
+                        help="Number of initial steps to force gripper open during approach (default: 15)")
     parser.add_argument("--friction_boost", type=float, default=1.0,
                         help="Friction multiplier for gripper contact pads (default: 1.0, standard unmodified MuJoCo physics)")
     parser.add_argument("--grasp_settle_steps", type=int, default=12,

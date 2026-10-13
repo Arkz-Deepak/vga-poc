@@ -58,7 +58,8 @@ class VGAPolicy(nn.Module):
         w_rot: float = 0.01,
         schmitt_low: float = 0.40,
         schmitt_high: float = 0.60,
-        min_hold_steps: int = 60,
+        min_hold_steps: int = 15,
+        min_approach_steps: int = 15,
         sigma_min: float = 1e-4,
         pretrained: bool = True,
         freeze_backbones: bool = True,
@@ -83,6 +84,7 @@ class VGAPolicy(nn.Module):
             schmitt_low = getattr(cfg, "schmitt_low", schmitt_low)
             schmitt_high = getattr(cfg, "schmitt_high", schmitt_high)
             min_hold_steps = getattr(cfg, "min_hold_steps", min_hold_steps)
+            min_approach_steps = getattr(cfg, "min_approach_steps", min_approach_steps)
             pretrained = getattr(cfg, "pretrained", pretrained)
             freeze_backbones = getattr(cfg, "freeze_backbones", freeze_backbones)
         self.action_dim = action_dim
@@ -130,6 +132,7 @@ class VGAPolicy(nn.Module):
             low_thresh=schmitt_low,
             high_thresh=schmitt_high,
             min_hold_steps=min_hold_steps,
+            min_approach_steps=min_approach_steps,
         )
 
         # 5. Runtime Action Chunk Queue for Rolling Rollouts

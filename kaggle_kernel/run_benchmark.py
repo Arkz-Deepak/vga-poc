@@ -99,7 +99,6 @@ def main():
         f"--max_steps 280 "
         f"--pure_policy "
         f"--friction_boost 1.0 "
-        f"--flip_image "
         f"--video_dir {video_dir} "
         f"--output_json {results_dir}/closed_loop_simulation_results.json"
     )

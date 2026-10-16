@@ -339,7 +339,7 @@ def run_smolvla_evaluation(
     record_videos: bool = True,
     video_dir: str = "results/videos_smolvla",
     output_json: str = "results/smolvla_simulation_results.json",
-    flip_image: bool = True,
+    flip_image: bool = False,
     camera_perturbation: bool = False,
 ):
     print("=" * 68)
@@ -807,8 +807,10 @@ def main():
                         help="Directory to save rollout videos")
     parser.add_argument("--output_json", type=str, default="/kaggle/working/vga-poc/results/smolvla_simulation_results.json",
                         help="Path to output JSON summary file")
-    parser.add_argument("--no_flip_image", dest="flip_image", action="store_false", default=True,
-                        help="Disable 180° rotation matching LeRobot camera convention")
+    parser.add_argument("--flip_image", dest="flip_image", action="store_true", default=False,
+                        help="Whether to apply 180° rotation matching legacy camera convention (default: False)")
+    parser.add_argument("--no_flip_image", dest="flip_image", action="store_false",
+                        help="Disable 180° rotation")
     parser.add_argument("--camera_perturbation", "--libero_plus", dest="camera_perturbation", action="store_true", default=False,
                         help="Enable camera viewpoint perturbations to test LIBERO-Plus camera pose invariance")
 

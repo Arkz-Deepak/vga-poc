@@ -41,8 +41,8 @@ class ModelConfig:
     w_rot: float = 0.01           # Relative weighting of rotational jerk/acceleration vs translational
     beta_jerk: float = 0.5        # Relative weighting of jerk penalty compared to acceleration
     lambda_vq: float = 0.1        # Auxiliary VQ-depth classification loss weight
-    kinematic_anneal_steps: int = 15000  # Warmup steps before full kinematic loss is applied
-    max_lambda_kin: float = 0.05  # Maximum kinematic loss coefficient after warmup
+    kinematic_anneal_steps: int = 5000   # Warmup steps before full kinematic loss is applied
+    max_lambda_kin: float = 0.0005       # Balanced kinematic loss coefficient (prevents gradient distortion)
 
     # 5. Controller & Inference
     dt: float = 0.02              # 20 ms per step -> 50 Hz control frequency

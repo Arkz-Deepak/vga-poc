@@ -507,7 +507,7 @@ def run_closed_loop_evaluation(
     min_approach_steps: int = 15,
     friction_boost: float = 1.0,
     grasp_settle_steps: int = 12,
-    flip_image: bool = True,
+    flip_image: bool = False,
     grasp_dist_thresh: float = 5.4,
     proximity_guard: bool = True,
     policy_type: str = "vga",
@@ -1270,8 +1270,8 @@ def main():
                         help="Friction multiplier for gripper contact pads (default: 1.0, standard unmodified MuJoCo physics)")
     parser.add_argument("--grasp_settle_steps", type=int, default=12,
                         help="Steps to dwell and clamp at grasp depth before lifting (default: 12)")
-    parser.add_argument("--flip_image", dest="flip_image", action="store_true", default=True,
-                        help="Whether to apply 180° rotation to camera images matching LeRobot LiberoProcessorStep convention (default: True)")
+    parser.add_argument("--flip_image", dest="flip_image", action="store_true", default=False,
+                        help="Whether to apply 180° rotation to camera images matching LeRobot LiberoProcessorStep convention (default: False)")
     parser.add_argument("--no_flip_image", dest="flip_image", action="store_false",
                         help="Disable 180° rotation")
     parser.add_argument("--grasp_dist_thresh", type=float, default=5.4,

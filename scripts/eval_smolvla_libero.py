@@ -588,10 +588,12 @@ def run_smolvla_evaluation(
 
                 # Pure Neural Action Selection via SmolVLA (with proper normalization / unnormalization)
                 if preprocessor is not None and postprocessor is not None:
+                    img_f = torch.from_numpy(img_front_np).permute(2, 0, 1).float() / 255.0
+                    img_w = (torch.from_numpy(img_wrist_np).permute(2, 0, 1).float() / 255.0) if img_wrist_np is not None else img_f
                     raw_obs = {
-                        "observation.images.image": torch.from_numpy(img_front_np),
-                        "observation.images.image2": torch.from_numpy(img_wrist_np if img_wrist_np is not None else img_front_np),
-                        "observation.state": torch.from_numpy(state_8d),
+                        "observation.images.image": img_f,
+                        "observation.images.image2": img_w,
+                        "observation.state": torch.from_numpy(state_8d).float(),
                         "task": task_desc,
                     }
                     processed_obs = preprocessor(raw_obs)

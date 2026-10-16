@@ -217,7 +217,8 @@ class VGAPolicy(nn.Module):
 
         # 5. Kinematic Smoothness Loss on predicted trajectory
         # Flow matching predicts: x_0_pred = (x_t - t * v_pred) / (1 - (1 - sigma_min) * t)
-        denom = (1.0 - (1.0 - self.sigma_min) * t_exp).clamp(min=1e-3)
+        # Clamped at 0.05 to prevent 1/(1-t) numerical divergence when t -> 1
+        denom = (1.0 - (1.0 - self.sigma_min) * t_exp).clamp(min=0.05)
         x_0_pred = (x_t - t_exp * v_pred) / denom
 
         if prefix_waypoints is not None:

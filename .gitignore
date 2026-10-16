@@ -53,6 +53,7 @@ runs/
 !results/videos/*.mp4
 !results/*.png
 results/kaggle_run/
+results/kaggle_run_v2/
 
 # Jupyter
 .ipynb_checkpoints/

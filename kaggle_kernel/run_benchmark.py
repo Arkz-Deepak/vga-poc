@@ -69,18 +69,18 @@ def main():
     os.makedirs(results_dir, exist_ok=True)
     os.makedirs(video_dir, exist_ok=True)
 
-    # 6. Execute 1,500-Step Training with In-Memory Caching (~60s on Tesla T4)
+    # 6. Execute 2,500-Step Training with In-Memory Caching (~90s on Tesla T4)
     train_cmd = (
         f"python {repo_dir}/scripts/train_vga.py "
         f"--task_id 0 "
         f"--shots 20 "
-        f"--steps 1500 "
+        f"--steps 2500 "
         f"--batch_size 16 "
-        f"--lr 0.0002 "
+        f"--lr 0.0003 "
         f"--in_memory "
         f"--output_dir {ckpt_dir}"
     )
-    run_cmd(train_cmd, "High-Throughput Policy Training (1,500 steps, 20 shots, in-memory RAM caching)")
+    run_cmd(train_cmd, "High-Throughput Policy Training (2,500 steps, 20 shots, in-memory RAM caching)")
 
     # 7. Execute Closed-Loop MuJoCo Simulation (Pure Neural Policy)
     ckpt_path = os.path.join(ckpt_dir, "vga_libero_policy.pt")
@@ -99,6 +99,9 @@ def main():
         f"--max_steps 280 "
         f"--pure_policy "
         f"--friction_boost 1.0 "
+        f"--min_approach_steps 30 "
+        f"--schmitt_high 0.70 "
+        f"--schmitt_low 0.35 "
         f"--video_dir {video_dir} "
         f"--output_json {results_dir}/closed_loop_simulation_results.json"
     )

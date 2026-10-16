@@ -54,6 +54,7 @@ runs/
 !results/*.png
 results/kaggle_run/
 results/kaggle_run_v2/
+results/kaggle_run_v3/
 
 # Jupyter
 .ipynb_checkpoints/

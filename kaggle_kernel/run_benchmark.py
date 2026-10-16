@@ -105,21 +105,51 @@ def main():
     )
     run_cmd(eval_cmd, "Closed-Loop MuJoCo Simulation Benchmark (Pure Policy, Standard Physics)")
 
-    # 8. Summary of Results
+    # 8. Summary of VGA Results
     res_json = os.path.join(results_dir, "closed_loop_simulation_results.json")
     if os.path.exists(res_json):
         with open(res_json, "r") as f:
             data = json.load(f)
         print("\n" + "="*70)
-        print("          OFFICIAL CLOSED-LOOP BENCHMARK RESULTS")
+        print("          OFFICIAL VGA CLOSED-LOOP BENCHMARK RESULTS")
         print("="*70)
         print(f"Overall Success Rate: {data.get('overall_success_rate_pct', 0.0):.1f}%")
         print(f"Mean RMS Jerk:        {data.get('rms_jerk_mps3', 0.0):.2f} m/s³")
         print("="*70 + "\n")
 
+    # 9. Benchmark SmolVLA-450M Baseline
+    smol_video_dir = "/kaggle/working/results/videos_smolvla"
+    os.makedirs(smol_video_dir, exist_ok=True)
+    smol_cmd = (
+        f"python {repo_dir}/scripts/eval_smolvla_libero.py "
+        f"--policy_path lerobot/smolvla_libero "
+        f"--task_id 0 "
+        f"--num_episodes 5 "
+        f"--n_action_steps 10 "
+        f"--video_dir {smol_video_dir} "
+        f"--output_json {results_dir}/smolvla_simulation_results.json"
+    )
+    run_cmd(smol_cmd, "SmolVLA-450M Baseline Evaluation", check=False)
+
+    # 10. Composite Side-by-Side Comparison Video (VGA vs SmolVLA)
+    import glob
+    vga_vids = sorted(glob.glob(f"{video_dir}/*success*.mp4") or glob.glob(f"{video_dir}/*.mp4"))
+    smol_vids = sorted(glob.glob(f"{smol_video_dir}/*SUCC*.mp4") or glob.glob(f"{smol_video_dir}/*.mp4"))
+    comp_out = f"{results_dir}/comparison_vga_vs_smolvla_task0.mp4"
+    if vga_vids and smol_vids:
+        grid_cmd = (
+            f"python {repo_dir}/scripts/create_comparison_grid.py "
+            f"--videos {vga_vids[0]} {smol_vids[0]} "
+            f"--labels 'VGA (Few-Shot Policy)' 'SmolVLA-450M Baseline' "
+            f"--task_desc 'pick up the black bowl between the plate and the ramekin and place it on the plate' "
+            f"--task_id 0 "
+            f"--output {comp_out}"
+        )
+        run_cmd(grid_cmd, "Generating Side-by-Side Comparison Video Grid (VGA vs SmolVLA)", check=False)
+
     # List generated artifacts
     print("\nSaved Artifacts in /kaggle/working/:")
-    run_cmd("ls -lh /kaggle/working/checkpoints /kaggle/working/results /kaggle/working/results/videos", "Listing Output Files", check=False)
+    run_cmd("ls -lh /kaggle/working/checkpoints /kaggle/working/results /kaggle/working/results/videos /kaggle/working/results/videos_smolvla", "Listing Output Files", check=False)
     print("\n🎉 Headless batch job completed successfully!")
 
 if __name__ == "__main__":

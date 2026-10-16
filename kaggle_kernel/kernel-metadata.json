@@ -1,6 +1,6 @@
 {
-  "id": "INSERT_KAGGLE_USERNAME_HERE/vga-libero-benchmark",
-  "title": "VGA LIBERO Benchmark",
+  "id": "deepark121/vga-poc-benchmark",
+  "title": "VGA PoC Benchmark",
   "code_file": "run_benchmark.py",
   "language": "python",
   "kernel_type": "script",

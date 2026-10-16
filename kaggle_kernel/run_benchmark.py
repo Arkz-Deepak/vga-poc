@@ -45,6 +45,9 @@ def main():
 
     # 3. Install Python Dependencies
     pip_cmd = (
+        'pip install --quiet --break-system-packages "av<14" datasets num2words '
+        'git+https://github.com/huggingface/lerobot.git '
+        'zarr einops scipy torchvision peft accelerate matplotlib imageio imageio-ffmpeg "hf-libero>=0.1.4" mujoco 2>/dev/null || '
         'pip install --quiet "av<14" datasets num2words '
         'git+https://github.com/huggingface/lerobot.git '
         'zarr einops scipy torchvision peft accelerate matplotlib imageio imageio-ffmpeg "hf-libero>=0.1.4" mujoco'

@@ -884,23 +884,30 @@ def run_closed_loop_evaluation(
                 if not pure_policy and is_bowl_task:
                     # Assisted Mode: Centering targets true object centroid (norm_xy -> 0.0), never drags ungrasped objects
                     if not has_grasped:
-                        # Approach Phase: Descent & horizontal centering directly toward object centroid
-                        if ee_z is not None and ee_z > (ref_z + 0.015):
-                            action_np[2] = min(-0.25, float(action_np[2]))
-                        else:
-                            action_np[2] = min(0.0, float(action_np[2]))
-
-                        # True Centroid Alignment: aim for center (0.0 cm offset)
+                        # Approach Phase: Fly in cleanly ABOVE table height to prevent fingertip table friction
                         if dist_xy_ee_bowl is not None and ee_pos is not None:
                             delta_xy = bowl_pos[:2] - ee_pos[:2]
                             norm_xy = float(np.linalg.norm(delta_xy))
-                            if norm_xy > 0.020:
-                                unit_xy = delta_xy / norm_xy
-                                centering_gain = min(0.25, norm_xy * 1.5)
-                                action_np[0] = float(np.clip(action_np[0] * 0.65 + unit_xy[0] * centering_gain, -0.30, 0.30))
-                                action_np[1] = float(np.clip(action_np[1] * 0.65 + unit_xy[1] * centering_gain, -0.30, 0.30))
+                            unit_xy = delta_xy / max(1e-6, norm_xy)
 
-                        # Proximity guard: only clamp when centered and at grasp depth
+                            if dist_xy_ee_bowl > 5.5:
+                                # Stage 1: Fly horizontally towards bowl while holding clearance above table
+                                action_np[0] = float(unit_xy[0] * 0.28)
+                                action_np[1] = float(unit_xy[1] * 0.28)
+                                if ee_z is not None and ee_z < (ref_z + 0.065):
+                                    action_np[2] = 0.12  # Lift away from tabletop
+                                elif ee_z is not None and ee_z > (ref_z + 0.090):
+                                    action_np[2] = -0.15  # Descend towards fly-in altitude
+                                else:
+                                    action_np[2] = 0.02   # Level cruise
+                                action_np[6] = -1.0
+                            else:
+                                # Stage 2: Squarely centered above bowl rim -> Descend directly onto rim
+                                action_np[0] = float(unit_xy[0] * 0.08)
+                                action_np[1] = float(unit_xy[1] * 0.08)
+                                action_np[2] = -0.28  # Decisive descent onto rim
+
+                        # Proximity guard: clamp only when centered and at grasp depth
                         is_at_obj = (dist_xy_ee_bowl is not None and dist_xy_ee_bowl <= 6.5 and ee_z is not None and ee_z <= (ref_z + 0.024))
                         if proximity_guard and not is_at_obj:
                             action_np[6] = -1.0
@@ -908,7 +915,7 @@ def run_closed_loop_evaluation(
                                 policy.gripper_controller.current_state = policy.gripper_controller.open_val
                                 policy.gripper_controller.steps_in_state = 10
                             in_mid_air = True
-                        elif is_at_obj and step >= 30:
+                        elif is_at_obj and step >= 25:
                             action_np[6] = 1.0
 
                     else:

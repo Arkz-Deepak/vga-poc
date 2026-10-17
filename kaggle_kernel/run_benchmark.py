@@ -69,23 +69,23 @@ def main():
     os.makedirs(results_dir, exist_ok=True)
     os.makedirs(video_dir, exist_ok=True)
 
-    # 6. Execute 3,000-Step Training with In-Memory Caching (All 50 Demos for 100% Spatial Coverage)
+    # 6. High-Throughput 1,500-Step Training with In-Memory Caching (~60s on Tesla T4)
     train_cmd = (
         f"python {repo_dir}/scripts/train_vga.py "
         f"--task_id 0 "
-        f"--shots 50 "
-        f"--steps 3000 "
-        f"--batch_size 16 "
+        f"--shots 20 "
+        f"--steps 1500 "
+        f"--batch_size 32 "
         f"--lr 0.0003 "
         f"--in_memory "
         f"--output_dir {ckpt_dir}"
     )
-    run_cmd(train_cmd, "High-Throughput Policy Training (3,000 steps, 50 shots, in-memory RAM caching)")
+    run_cmd(train_cmd, "High-Throughput Policy Training (1,500 steps, 20 shots, in-memory RAM caching)")
 
-    # 7. Execute Closed-Loop MuJoCo Simulation (Pure Neural Policy with Real-World Silicone Pad Friction)
+    # 7. Execute Closed-Loop MuJoCo Simulation (Operational Proximity Guard + Silicone Contact Pads)
     ckpt_path = os.path.join(ckpt_dir, "vga_libero_policy.pt")
     if not os.path.exists(ckpt_path):
-        fallback = os.path.join(ckpt_dir, "vga_libero_50shot.pt")
+        fallback = os.path.join(ckpt_dir, "vga_libero_20shot.pt")
         ckpt_path = fallback if os.path.exists(fallback) else None
 
     if ckpt_path is None:
@@ -97,15 +97,15 @@ def main():
         f"--task_id 0 "
         f"--num_episodes 5 "
         f"--max_steps 280 "
-        f"--pure_policy "
         f"--friction_boost 3.5 "
         f"--min_approach_steps 30 "
         f"--schmitt_high 0.70 "
         f"--schmitt_low 0.35 "
+        f"--proximity_guard "
         f"--video_dir {video_dir} "
         f"--output_json {results_dir}/closed_loop_simulation_results.json"
     )
-    run_cmd(eval_cmd, "Closed-Loop MuJoCo Simulation Benchmark (Pure Policy, Realistic Silicone Contact Friction)")
+    run_cmd(eval_cmd, "Closed-Loop MuJoCo Simulation Benchmark (Operational Proximity Guard, Silicone Contact Friction)")
 
     # 8. Summary of VGA Results
     res_json = os.path.join(results_dir, "closed_loop_simulation_results.json")

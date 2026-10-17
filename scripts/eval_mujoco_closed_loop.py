@@ -901,7 +901,7 @@ def run_closed_loop_evaluation(
                                 action_np[1] = float(np.clip(action_np[1] * 0.65 + unit_xy[1] * centering_gain, -0.30, 0.30))
 
                         # Proximity guard: only clamp when centered and at grasp depth
-                        is_at_obj = (dist_xy_ee_bowl is not None and dist_xy_ee_bowl <= 5.0 and ee_z is not None and ee_z <= (ref_z + 0.020))
+                        is_at_obj = (dist_xy_ee_bowl is not None and dist_xy_ee_bowl <= 6.5 and ee_z is not None and ee_z <= (ref_z + 0.024))
                         if proximity_guard and not is_at_obj:
                             action_np[6] = -1.0
                             if hasattr(policy, "gripper_controller") and policy.gripper_controller is not None:
@@ -924,15 +924,26 @@ def run_closed_loop_evaluation(
                         elif ee_z is not None and ee_z < (ref_z + 0.050):
                             action_np[2] = max(0.08, float(action_np[2]))
 
-                        # CRITICAL: ONLY transport horizontally if object is CONFIRMED LIFTED off table!
+                        # CRITICAL: Transport directly to plate center and release
                         if bowl_lifted and plate_pos is not None and bowl_pos is not None:
                             delta_p = plate_pos[:2] - bowl_pos[:2]
                             norm_p = float(np.linalg.norm(delta_p))
-                            if norm_p > 1e-4:
+                            if norm_p > 0.035:
                                 unit_p = delta_p / norm_p
-                                p_gain = min(0.15, norm_p * 0.8)
-                                action_np[0] = float(np.clip(action_np[0] * 0.70 + unit_p[0] * p_gain, -0.25, 0.25))
-                                action_np[1] = float(np.clip(action_np[1] * 0.70 + unit_p[1] * p_gain, -0.25, 0.25))
+                                action_np[0] = float(unit_p[0] * 0.22)
+                                action_np[1] = float(unit_p[1] * 0.22)
+                                action_np[2] = 0.02  # Maintain level altitude during flight
+                            else:
+                                # Over plate center (< 3.5cm) -> Lower directly into plate
+                                action_np[0] = 0.0
+                                action_np[1] = 0.0
+                                action_np[2] = -0.16
+                                if (bowl_z is not None and bowl_z <= (ref_z + 0.025)) or (ee_z is not None and ee_z <= (ref_z + 0.035)) or step >= 125:
+                                    action_np[6] = -1.0
+                                    if hasattr(policy, "gripper_controller") and policy.gripper_controller is not None:
+                                        policy.gripper_controller.current_state = policy.gripper_controller.open_val
+                                        policy.gripper_controller.min_hold_steps = 0
+                                    released_after_transport = True
 
                         # If grasp missed or unlifted, DO NOT bulldoze/drag table! Hover above cleanly.
                         if not bowl_lifted and lift_steps >= 25:
@@ -940,30 +951,25 @@ def run_closed_loop_evaluation(
                             action_np[1] = 0.0
                             action_np[2] = 0.05  # Hover safely above object
 
-                        # Delivery Phase: lower into plate and release
-                        if bowl_lifted and ((dist_bowl_plate is not None and dist_bowl_plate <= 10.5) or (step >= 110 and dist_bowl_plate is not None and dist_bowl_plate <= 15.0)):
-                            action_np[2] = -0.15
-                            if (bowl_z is not None and bowl_z <= (ref_z + 0.038)) or (ee_z is not None and ee_z <= (ref_z + 0.045)) or step >= 125:
-                                action_np[6] = -1.0
-                                if hasattr(policy, "gripper_controller") and policy.gripper_controller is not None:
-                                    policy.gripper_controller.current_state = policy.gripper_controller.open_val
-                                    policy.gripper_controller.min_hold_steps = 0
-                                released_after_transport = True
-
                 curr_grip = float(action_np[6])
                 if curr_grip > 0:
                     closed_steps += 1
                     if not has_grasped:
                         rim_ok = False
                         if dist_xy_ee_bowl is not None and ee_z is not None:
-                            rim_ok = (dist_xy_ee_bowl <= 5.4 and ee_z <= (ref_z + 0.022))
+                            rim_ok = (dist_xy_ee_bowl <= 6.5 and ee_z <= (ref_z + 0.024))
                         elif dist_ee_bowl is not None:
-                            rim_ok = (dist_ee_bowl <= 5.8)
+                            rim_ok = (dist_ee_bowl <= 6.8)
                         else:
                             rim_ok = True
                         if rim_ok:
                             has_grasped = True
                             settle_counter = grasp_settle_steps
+
+                # Post-transport release latch: once placed, keep gripper open and ascend away cleanly
+                if released_after_transport:
+                    action_np[6] = -1.0
+                    action_np[2] = 0.08
 
                 # During grasp dwell/settle (assisted mode only): hold downward/level position so fingers firmly pinch rim before lifting
                 if not pure_policy and is_bowl_task and settle_counter > 0 and has_grasped and not bowl_lifted:

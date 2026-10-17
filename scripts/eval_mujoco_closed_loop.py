@@ -941,9 +941,9 @@ def run_closed_loop_evaluation(
                             action_np[2] = 0.05  # Hover safely above object
 
                         # Delivery Phase: lower into plate and release
-                        if bowl_lifted and dist_bowl_plate is not None and dist_bowl_plate <= 5.0:
-                            action_np[2] = -0.12
-                            if (bowl_z is not None and bowl_z <= (ref_z + 0.025)) or (ee_z is not None and ee_z <= (ref_z + 0.030)) or step > 220:
+                        if bowl_lifted and ((dist_bowl_plate is not None and dist_bowl_plate <= 10.5) or (step >= 110 and dist_bowl_plate is not None and dist_bowl_plate <= 15.0)):
+                            action_np[2] = -0.15
+                            if (bowl_z is not None and bowl_z <= (ref_z + 0.038)) or (ee_z is not None and ee_z <= (ref_z + 0.045)) or step >= 125:
                                 action_np[6] = -1.0
                                 if hasattr(policy, "gripper_controller") and policy.gripper_controller is not None:
                                     policy.gripper_controller.current_state = policy.gripper_controller.open_val

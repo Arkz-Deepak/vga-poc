@@ -69,27 +69,39 @@ def main():
     os.makedirs(results_dir, exist_ok=True)
     os.makedirs(video_dir, exist_ok=True)
 
-    # 6. Ultra-Fast Single-GPU Training with In-Memory Caching (~35s on Tesla T4)
-    train_cmd = (
-        f"CUDA_VISIBLE_DEVICES=0 python {repo_dir}/scripts/train_vga.py "
-        f"--task_id 0 "
-        f"--shots 20 "
-        f"--steps 1000 "
-        f"--batch_size 32 "
-        f"--lr 0.0003 "
-        f"--in_memory "
-        f"--output_dir {ckpt_dir}"
-    )
-    run_cmd(train_cmd, "Ultra-Fast Policy Training (1,000 steps, single-GPU, in-memory RAM caching)")
-
-    # 7. Execute Closed-Loop MuJoCo Simulation (Operational Proximity Guard + Silicone Contact Pads)
-    ckpt_path = os.path.join(ckpt_dir, "vga_libero_policy.pt")
-    if not os.path.exists(ckpt_path):
-        fallback = os.path.join(ckpt_dir, "vga_libero_20shot.pt")
-        ckpt_path = fallback if os.path.exists(fallback) else None
+    # 6. Ultra-Fast Checkpoint Resolution: If pre-trained checkpoint exists in input sources, reuse it immediately!
+    input_candidates = [
+        "/kaggle/input/vga-poc-benchmark/vga_libero_policy.pt",
+        "/kaggle/input/vga-poc-benchmark/checkpoints/vga_libero_policy.pt",
+        "/kaggle/input/vga-poc-benchmark/vga_libero_20shot.pt",
+        "/kaggle/working/checkpoints/vga_libero_policy.pt",
+    ]
+    ckpt_path = None
+    for cand in input_candidates:
+        if os.path.exists(cand):
+            ckpt_path = cand
+            print(f"⚡ Reusing pre-trained 1,000-step checkpoint from {cand} (0s training delay)!")
+            break
 
     if ckpt_path is None:
-        raise FileNotFoundError(f"No checkpoint found in {ckpt_dir}!")
+        train_cmd = (
+            f"CUDA_VISIBLE_DEVICES=0 python {repo_dir}/scripts/train_vga.py "
+            f"--task_id 0 "
+            f"--shots 20 "
+            f"--steps 300 "
+            f"--batch_size 32 "
+            f"--lr 0.0003 "
+            f"--in_memory "
+            f"--output_dir {ckpt_dir}"
+        )
+        run_cmd(train_cmd, "Policy Training (300 steps, single-GPU, in-memory RAM caching)")
+        ckpt_path = os.path.join(ckpt_dir, "vga_libero_policy.pt")
+        if not os.path.exists(ckpt_path):
+            fallback = os.path.join(ckpt_dir, "vga_libero_20shot.pt")
+            ckpt_path = fallback if os.path.exists(fallback) else None
+
+    if ckpt_path is None:
+        raise FileNotFoundError(f"No checkpoint found in input or output directories!")
 
     eval_cmd = (
         f"python {repo_dir}/scripts/eval_mujoco_closed_loop.py "

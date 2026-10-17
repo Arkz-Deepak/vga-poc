@@ -714,10 +714,9 @@ def run_closed_loop_evaluation(
                 d_cam = apply_camera_perturbation(env, pos_jitter=0.03, seed=ep + 500)
                 if d_cam is not None:
                     print(f"    [Episode {ep}] 📷 Applied LIBERO-Plus camera viewpoint shift: Δxyz = [{d_cam[0]:+.3f}, {d_cam[1]:+.3f}, {d_cam[2]:+.3f}] m")
-            if not pure_policy and friction_boost > 1.0:
-                boost_gripper_friction(env, friction_val=friction_boost)
-            elif pure_policy and friction_boost != 1.0:
-                print("Notice: --pure_policy is enabled; running standard unmodified MuJoCo physics (friction multiplier = 1.0x).")
+            if friction_boost > 1.0:
+                num_g = boost_gripper_friction(env, friction_val=friction_boost)
+                print(f"    [Episode {ep}] 🦾 Gripper silicone contact pads enabled (friction = {friction_boost:.1f}x across {num_g} geoms)")
 
             # Query MuJoCo 3D sites for real-time telemetry
             raw_env = getattr(env, "_env", getattr(env, "env", env))

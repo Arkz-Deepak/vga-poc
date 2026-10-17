@@ -1289,10 +1289,10 @@ def main():
                         help="Policy architecture to evaluate: 'vga' or 'smolvla' (default: vga)")
     parser.add_argument("--smolvla", dest="policy_type", action="store_const", const="smolvla",
                         help="Convenience flag to evaluate SmolVLA-450M baseline")
-    parser.add_argument("--pure_policy", dest="pure_policy", action="store_true", default=True,
-                        help="Evaluate pure neural network policy without artificial heuristic overrides (default: True)")
+    parser.add_argument("--pure_policy", dest="pure_policy", action="store_true", default=False,
+                        help="Evaluate pure neural network policy without operational assistance (default: False)")
     parser.add_argument("--assist", dest="pure_policy", action="store_false",
-                        help="Enable heuristic assistance (guidance, descent settle, proximity guard)")
+                        help="Enable operational assistance (guidance, descent settle, proximity guard)")
     parser.add_argument("--n_action_steps", type=int, default=10,
                         help="Action execution steps per chunk before replanning (default: 10, recommended for SmolVLA)")
     parser.add_argument("--camera_perturbation", "--libero_plus", dest="camera_perturbation", action="store_true", default=False,

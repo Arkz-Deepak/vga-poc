@@ -935,17 +935,17 @@ def run_closed_loop_evaluation(
                         if bowl_lifted and plate_pos is not None and bowl_pos is not None:
                             delta_p = plate_pos[:2] - bowl_pos[:2]
                             norm_p = float(np.linalg.norm(delta_p))
-                            if norm_p > 0.035:
+                            if norm_p > 0.045:
                                 unit_p = delta_p / norm_p
                                 action_np[0] = float(unit_p[0] * 0.22)
                                 action_np[1] = float(unit_p[1] * 0.22)
                                 action_np[2] = 0.02  # Maintain level altitude during flight
                             else:
-                                # Over plate center (< 3.5cm) -> Lower directly into plate
+                                # Over plate basin (< 4.5cm) -> Lower directly into plate
                                 action_np[0] = 0.0
                                 action_np[1] = 0.0
                                 action_np[2] = -0.16
-                                if (bowl_z is not None and bowl_z <= (ref_z + 0.025)) or (ee_z is not None and ee_z <= (ref_z + 0.035)) or step >= 125:
+                                if (bowl_z is not None and bowl_z <= (ref_z + 0.038)) or (ee_z is not None and ee_z <= (ref_z + 0.048)) or step >= 120:
                                     action_np[6] = -1.0
                                     if hasattr(policy, "gripper_controller") and policy.gripper_controller is not None:
                                         policy.gripper_controller.current_state = policy.gripper_controller.open_val
@@ -975,6 +975,8 @@ def run_closed_loop_evaluation(
 
                 # Post-transport release latch: once placed, keep gripper open and ascend away cleanly
                 if released_after_transport:
+                    action_np[0] = 0.0
+                    action_np[1] = 0.0
                     action_np[6] = -1.0
                     action_np[2] = 0.08
 
@@ -1012,7 +1014,7 @@ def run_closed_loop_evaluation(
                     plate_str = f" | Dist to Plate: {dist_bowl_plate:.1f} cm" if dist_bowl_plate is not None else ""
                     print(f"    [Step {step:3d}] 📦 Bowl LIFTED off table! Bowl Z: {bowl_z:.3f} m (Ref: {ref_z:.3f} m){plate_str}")
 
-                if bowl_lifted and not bowl_slipped and bowl_z is not None and ee_z is not None:
+                if bowl_lifted and not bowl_slipped and not released_after_transport and bowl_z is not None and ee_z is not None:
                     if bowl_z < (ref_z + 0.010) and ee_z > (ref_z + 0.060):
                         bowl_slipped = True
                         print(f"    [Step {step:3d}] ⚠️ SLIP DETECTED: Bowl dropped back to table (Z: {bowl_z:.3f} m) while arm is at Z: {ee_z:.3f} m!")

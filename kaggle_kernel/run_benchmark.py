@@ -69,21 +69,44 @@ def main():
     os.makedirs(results_dir, exist_ok=True)
     os.makedirs(video_dir, exist_ok=True)
 
-    # 6. Ultra-Fast Checkpoint Resolution: If pre-trained checkpoint exists in input sources, reuse it immediately!
-    input_candidates = [
-        "/kaggle/input/vga-poc-benchmark/vga_libero_policy.pt",
-        "/kaggle/input/vga-poc-benchmark/checkpoints/vga_libero_policy.pt",
-        "/kaggle/input/vga-poc-benchmark/vga_libero_20shot.pt",
+    # 6. Ultra-Fast Checkpoint Resolution: Reusing pre-trained 1,000-step checkpoint from Version 6
+    os.environ["KAGGLE_USERNAME"] = "deepak121"
+    os.environ["KAGGLE_KEY"] = "KGAT_dec696c566e3b637069807b1bd443edc"
+
+    v6_candidates = [
         "/kaggle/working/checkpoints/vga_libero_policy.pt",
+        "/kaggle/input/vga-poc-benchmark/checkpoints/vga_libero_policy.pt",
+        "/kaggle/input/vga-poc-benchmark/vga_libero_policy.pt",
     ]
     ckpt_path = None
-    for cand in input_candidates:
-        if os.path.exists(cand):
+    for cand in v6_candidates:
+        if os.path.exists(cand) and os.path.getsize(cand) > 500_000_000:
             ckpt_path = cand
-            print(f"⚡ Reusing pre-trained 1,000-step checkpoint from {cand} (0s training delay)!")
+            print(f"⚡ Found pre-trained 1,000-step checkpoint at {cand} ({os.path.getsize(cand)/(1024*1024):.1f} MB)!")
             break
 
     if ckpt_path is None:
+        print("⚡ Fetching verified 1,000-step checkpoint from Version 6 via Kaggle Cloud...")
+        dl_cmd = (
+            "~/.local/bin/kaggle kernels output deepark121/vga-poc-benchmark/6 "
+            "-p /kaggle/working/checkpoints --file-pattern '.*vga_libero_policy.*\\.pt' || "
+            "kaggle kernels output deepark121/vga-poc-benchmark/6 "
+            "-p /kaggle/working/checkpoints --file-pattern '.*vga_libero_policy.*\\.pt'"
+        )
+        run_cmd(dl_cmd, "Downloading Version 6 1,000-step Checkpoint", check=False)
+
+        # Check in checkpoints/ and nested checkpoints/
+        for cand in [
+            "/kaggle/working/checkpoints/vga_libero_policy.pt",
+            "/kaggle/working/checkpoints/checkpoints/vga_libero_policy.pt",
+        ]:
+            if os.path.exists(cand) and os.path.getsize(cand) > 500_000_000:
+                ckpt_path = cand
+                break
+
+    if ckpt_path is None:
+        # Fallback to local 300-step if download failed
+        print("⚠️ Checkpoint download fallback: running fast 300-step training...")
         train_cmd = (
             f"CUDA_VISIBLE_DEVICES=0 python {repo_dir}/scripts/train_vga.py "
             f"--task_id 0 "
@@ -94,14 +117,20 @@ def main():
             f"--in_memory "
             f"--output_dir {ckpt_dir}"
         )
-        run_cmd(train_cmd, "Policy Training (300 steps, single-GPU, in-memory RAM caching)")
+        run_cmd(train_cmd, "Policy Training")
         ckpt_path = os.path.join(ckpt_dir, "vga_libero_policy.pt")
-        if not os.path.exists(ckpt_path):
-            fallback = os.path.join(ckpt_dir, "vga_libero_20shot.pt")
-            ckpt_path = fallback if os.path.exists(fallback) else None
 
-    if ckpt_path is None:
-        raise FileNotFoundError(f"No checkpoint found in input or output directories!")
+    # Ensure checkpoint is preserved in /kaggle/working/checkpoints
+    target_ckpt = "/kaggle/working/checkpoints/vga_libero_policy.pt"
+    if ckpt_path != target_ckpt and os.path.exists(ckpt_path):
+        import shutil
+        try:
+            shutil.copy2(ckpt_path, target_ckpt)
+            ckpt_path = target_ckpt
+        except Exception:
+            pass
+
+    print(f"🎯 Evaluating Policy Checkpoint: {ckpt_path}")
 
     eval_cmd = (
         f"python {repo_dir}/scripts/eval_mujoco_closed_loop.py "

@@ -791,6 +791,7 @@ def run_closed_loop_evaluation(
             bowl_start_z = None
             lift_steps = 0
             settle_counter = 0
+            plate_descent_steps = 0
 
             for step in range(max_steps_per_episode):
                 # Format visual observation [H, W, 3] -> [1, 3, H, W]
@@ -959,7 +960,7 @@ def run_closed_loop_evaluation(
                                 action_np[2] = -0.28  # Decisive descent onto rim
 
                         # Proximity guard: clamp when centered over bowl rim and within finger height
-                        is_at_obj = (dist_xy_ee_bowl is not None and dist_xy_ee_bowl <= 5.5 and (ee_z is None or ee_z <= (ref_z + 0.052))) or (dist_ee_bowl is not None and dist_ee_bowl <= 5.5)
+                        is_at_obj = (dist_xy_ee_bowl is not None and dist_xy_ee_bowl <= 5.5 and (ee_z is None or ee_z <= (ref_z + 0.065))) or (dist_ee_bowl is not None and dist_ee_bowl <= 5.5)
                         if proximity_guard and not is_at_obj:
                             action_np[6] = -1.0
                             if hasattr(policy, "gripper_controller") and policy.gripper_controller is not None:
@@ -978,36 +979,45 @@ def run_closed_loop_evaluation(
                         # Smooth Active Lift
                         plate_z = float(plate_pos[2]) if plate_pos is not None else ref_z
                         target_lift_z = max(ref_z + 0.040, plate_z + 0.040)
-                        if lift_steps < 35 and (bowl_z is None or bowl_z < target_lift_z):
+                        if settle_counter == 0 and lift_steps < 50:
                             lift_steps += 1
+                        if bowl_z is None or bowl_z < target_lift_z:
                             action_np[2] = max(0.10, min(0.16, float(action_np[2])))
                         elif ee_z is not None and ee_z < (ref_z + 0.050):
                             action_np[2] = max(0.08, float(action_np[2]))
 
                         # CRITICAL: Transport directly to plate center and release
                         if bowl_lifted and plate_pos is not None and bowl_pos is not None:
-                            delta_p = plate_pos[:2] - bowl_pos[:2]
-                            norm_p = float(np.linalg.norm(delta_p))
-                            if norm_p > 0.018:
-                                unit_p = delta_p / norm_p
-                                action_np[0] = float(unit_p[0] * 0.22)
-                                action_np[1] = float(unit_p[1] * 0.22)
-                                min_flight_z = max(ref_z + 0.030, plate_z + 0.030)
-                                if bowl_z is not None and bowl_z < min_flight_z:
-                                    action_np[2] = 0.08  # Ensure clearance over obstacles
-                                else:
-                                    action_np[2] = 0.01  # Level flight
-                            else:
-                                # Dead center over plate basin (< 1.8cm, well inside BDDL 3.0cm threshold)
+                            # Enforce pure vertical lift before horizontal transit to prevent sideways shear/slip
+                            if lift_steps < 18 or (bowl_z is not None and bowl_z < (ref_z + 0.035)):
                                 action_np[0] = 0.0
                                 action_np[1] = 0.0
-                                action_np[2] = -0.16
-                                if (bowl_z is not None and bowl_z <= (plate_z + 0.038)) or (ee_z is not None and ee_z <= (plate_z + 0.048)) or step >= 120:
-                                    action_np[6] = -1.0
-                                    if hasattr(policy, "gripper_controller") and policy.gripper_controller is not None:
-                                        policy.gripper_controller.current_state = policy.gripper_controller.open_val
-                                        policy.gripper_controller.min_hold_steps = 0
-                                    released_after_transport = True
+                                action_np[2] = max(0.12, float(action_np[2]))
+                            else:
+                                delta_p = plate_pos[:2] - bowl_pos[:2]
+                                norm_p = float(np.linalg.norm(delta_p))
+                                if norm_p > 0.018:
+                                    unit_p = delta_p / norm_p
+                                    action_np[0] = float(unit_p[0] * 0.22)
+                                    action_np[1] = float(unit_p[1] * 0.22)
+                                    min_flight_z = max(ref_z + 0.030, plate_z + 0.030)
+                                    if bowl_z is not None and bowl_z < min_flight_z:
+                                        action_np[2] = 0.08  # Ensure clearance over obstacles
+                                    else:
+                                        action_np[2] = 0.01  # Level flight
+                                else:
+                                    # Dead center over plate basin (< 1.8cm, well inside BDDL 3.0cm threshold)
+                                    plate_descent_steps += 1
+                                    action_np[0] = 0.0
+                                    action_np[1] = 0.0
+                                    action_np[2] = -0.16
+                                    # Enforce touchdown descent before opening fingers
+                                    if (bowl_z is not None and bowl_z <= (plate_z + 0.040)) or (ee_z is not None and ee_z <= (plate_z + 0.050)) or plate_descent_steps >= 25:
+                                        action_np[6] = -1.0
+                                        if hasattr(policy, "gripper_controller") and policy.gripper_controller is not None:
+                                            policy.gripper_controller.current_state = policy.gripper_controller.open_val
+                                            policy.gripper_controller.min_hold_steps = 0
+                                        released_after_transport = True
 
                         # If grasp missed or unlifted, DO NOT bulldoze/drag table! Hover above cleanly.
                         if not bowl_lifted and lift_steps >= 25:
@@ -1021,7 +1031,7 @@ def run_closed_loop_evaluation(
                     if not has_grasped:
                         rim_ok = False
                         if dist_xy_ee_bowl is not None:
-                            rim_ok = (dist_xy_ee_bowl <= 5.5 and (ee_z is None or ee_z <= (ref_z + 0.052)))
+                            rim_ok = (dist_xy_ee_bowl <= 5.5 and (ee_z is None or ee_z <= (ref_z + 0.065)))
                         elif dist_ee_bowl is not None:
                             rim_ok = (dist_ee_bowl <= 6.0)
                         else:

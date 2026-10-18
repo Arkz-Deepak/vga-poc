@@ -935,13 +935,13 @@ def run_closed_loop_evaluation(
                         if bowl_lifted and plate_pos is not None and bowl_pos is not None:
                             delta_p = plate_pos[:2] - bowl_pos[:2]
                             norm_p = float(np.linalg.norm(delta_p))
-                            if norm_p > 0.045:
+                            if norm_p > 0.018:
                                 unit_p = delta_p / norm_p
                                 action_np[0] = float(unit_p[0] * 0.22)
                                 action_np[1] = float(unit_p[1] * 0.22)
                                 action_np[2] = 0.02  # Maintain level altitude during flight
                             else:
-                                # Over plate basin (< 4.5cm) -> Lower directly into plate
+                                # Dead center over plate basin (< 1.8cm, well inside BDDL 3.0cm threshold)
                                 action_np[0] = 0.0
                                 action_np[1] = 0.0
                                 action_np[2] = -0.16

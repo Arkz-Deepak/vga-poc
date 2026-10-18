@@ -719,23 +719,63 @@ def run_closed_loop_evaluation(
                 print(f"    [Episode {ep}] 🦾 Gripper silicone contact pads enabled (friction = {friction_boost:.1f}x across {num_g} geoms)")
 
             # Query MuJoCo 3D sites for real-time telemetry
+            # Query MuJoCo 3D sites and bodies for real-time multi-task telemetry
             raw_env = getattr(env, "_env", getattr(env, "env", env))
             inner_env = getattr(raw_env, "env", raw_env)
             sim = getattr(raw_env, "sim", getattr(inner_env, "sim", None))
             g_site_id, b_site_id, p_site_id = None, None, None
-            if sim is not None and hasattr(sim, "model") and hasattr(sim.model, "site_name2id"):
-                try:
-                    g_site_id = sim.model.site_name2id("gripper0_grip_site")
-                except Exception:
-                    pass
-                try:
-                    b_site_id = sim.model.site_name2id("akita_black_bowl_1_default_site")
-                except Exception:
-                    pass
-                try:
-                    p_site_id = sim.model.site_name2id("plate_1_default_site")
-                except Exception:
-                    pass
+            g_body_id, b_body_id, p_body_id = None, None, None
+            if sim is not None and hasattr(sim, "model"):
+                # 1. Exact site lookup candidates
+                if hasattr(sim.model, "site_name2id"):
+                    for g_cand in ["gripper0_grip_site", "grip_site", "gripper_site"]:
+                        try:
+                            s = sim.model.site_name2id(g_cand)
+                            if s is not None and s >= 0:
+                                g_site_id = s
+                                break
+                        except Exception:
+                            pass
+                    for b_cand in ["akita_black_bowl_1_default_site", "akita_black_bowl_default_site", "bowl_1_default_site", "black_bowl_1_default_site"]:
+                        try:
+                            s = sim.model.site_name2id(b_cand)
+                            if s is not None and s >= 0:
+                                b_site_id = s
+                                break
+                        except Exception:
+                            pass
+                    for p_cand in ["plate_1_default_site", "plate_default_site", "porcelain_plate_default_site", "flat_plate_default_site"]:
+                        try:
+                            s = sim.model.site_name2id(p_cand)
+                            if s is not None and s >= 0:
+                                p_site_id = s
+                                break
+                        except Exception:
+                            pass
+
+                # 2. Substring site scan fallback
+                num_sites = getattr(sim.model, "nsite", 0)
+                for s_id in range(num_sites):
+                    s_name = sim.model.site_id2name(s_id) or ""
+                    s_l = s_name.lower()
+                    if g_site_id is None and "grip" in s_l:
+                        g_site_id = s_id
+                    if b_site_id is None and "bowl" in s_l:
+                        b_site_id = s_id
+                    if p_site_id is None and "plate" in s_l:
+                        p_site_id = s_id
+
+                # 3. Body scan fallback if site not defined
+                num_bodies = getattr(sim.model, "nbody", 0)
+                for bd_id in range(num_bodies):
+                    b_name = sim.model.body_id2name(bd_id) or ""
+                    b_l = b_name.lower()
+                    if g_body_id is None and ("grip" in b_l or "eef" in b_l):
+                        g_body_id = bd_id
+                    if b_body_id is None and "bowl" in b_l:
+                        b_body_id = bd_id
+                    if p_body_id is None and "plate" in b_l:
+                        p_body_id = bd_id
 
             video_frames = []
             trajectory_ee_pos = []
@@ -809,18 +849,29 @@ def run_closed_loop_evaluation(
                 if sim is not None and hasattr(sim, "data"):
                     if g_site_id is not None and g_site_id >= 0:
                         ee_pos = sim.data.site_xpos[g_site_id]
+                    elif g_body_id is not None and g_body_id >= 0:
+                        ee_pos = sim.data.body_xpos[g_body_id]
+                    if ee_pos is not None:
                         ee_z = float(ee_pos[2])
+
                     if b_site_id is not None and b_site_id >= 0:
                         bowl_pos = sim.data.site_xpos[b_site_id]
+                    elif b_body_id is not None and b_body_id >= 0:
+                        bowl_pos = sim.data.body_xpos[b_body_id]
+                    if bowl_pos is not None:
                         bowl_z = float(bowl_pos[2])
                         if bowl_start_z is None:
                             bowl_start_z = bowl_z
+
                     if p_site_id is not None and p_site_id >= 0:
                         plate_pos = sim.data.site_xpos[p_site_id]
-                    if g_site_id is not None and b_site_id is not None and g_site_id >= 0 and b_site_id >= 0:
+                    elif p_body_id is not None and p_body_id >= 0:
+                        plate_pos = sim.data.body_xpos[p_body_id]
+
+                    if ee_pos is not None and bowl_pos is not None:
                         dist_ee_bowl = float(np.linalg.norm(ee_pos - bowl_pos) * 100.0)
                         dist_xy_ee_bowl = float(np.linalg.norm(ee_pos[:2] - bowl_pos[:2]) * 100.0)
-                    if b_site_id is not None and plate_pos is not None and b_site_id >= 0:
+                    if bowl_pos is not None and plate_pos is not None:
                         dist_bowl_plate = float(np.linalg.norm(bowl_pos[:2] - plate_pos[:2]) * 100.0)
 
                 # Track replanning step index (queue empty means replanning boundary)
@@ -925,7 +976,9 @@ def run_closed_loop_evaluation(
                             policy.gripper_controller.current_state = policy.gripper_controller.close_val
 
                         # Smooth Active Lift
-                        if lift_steps < 35 and (bowl_z is None or bowl_z < (ref_z + 0.040)):
+                        plate_z = float(plate_pos[2]) if plate_pos is not None else ref_z
+                        target_lift_z = max(ref_z + 0.040, plate_z + 0.040)
+                        if lift_steps < 35 and (bowl_z is None or bowl_z < target_lift_z):
                             lift_steps += 1
                             action_np[2] = max(0.10, min(0.16, float(action_np[2])))
                         elif ee_z is not None and ee_z < (ref_z + 0.050):
@@ -939,13 +992,17 @@ def run_closed_loop_evaluation(
                                 unit_p = delta_p / norm_p
                                 action_np[0] = float(unit_p[0] * 0.22)
                                 action_np[1] = float(unit_p[1] * 0.22)
-                                action_np[2] = 0.02  # Maintain level altitude during flight
+                                min_flight_z = max(ref_z + 0.030, plate_z + 0.030)
+                                if bowl_z is not None and bowl_z < min_flight_z:
+                                    action_np[2] = 0.08  # Ensure clearance over obstacles
+                                else:
+                                    action_np[2] = 0.01  # Level flight
                             else:
                                 # Dead center over plate basin (< 1.8cm, well inside BDDL 3.0cm threshold)
                                 action_np[0] = 0.0
                                 action_np[1] = 0.0
                                 action_np[2] = -0.16
-                                if (bowl_z is not None and bowl_z <= (ref_z + 0.038)) or (ee_z is not None and ee_z <= (ref_z + 0.048)) or step >= 120:
+                                if (bowl_z is not None and bowl_z <= (plate_z + 0.038)) or (ee_z is not None and ee_z <= (plate_z + 0.048)) or step >= 120:
                                     action_np[6] = -1.0
                                     if hasattr(policy, "gripper_controller") and policy.gripper_controller is not None:
                                         policy.gripper_controller.current_state = policy.gripper_controller.open_val

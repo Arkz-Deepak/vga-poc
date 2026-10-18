@@ -135,8 +135,8 @@ def main():
     eval_cmd = (
         f"python {repo_dir}/scripts/eval_mujoco_closed_loop.py "
         f"--checkpoint {ckpt_path} "
-        f"--task_id 0 "
-        f"--num_episodes 5 "
+        f"--all_tasks "
+        f"--num_episodes 2 "
         f"--max_steps 280 "
         f"--friction_boost 3.5 "
         f"--min_approach_steps 30 "

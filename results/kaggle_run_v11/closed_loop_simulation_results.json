@@ -1,0 +1,87 @@
+{
+  "overall_success_rate_pct": 100.0,
+  "ci_95_pct": 0.0,
+  "delta_vs_baseline_pct": 44.8,
+  "delta_ci_95_pct": 43.589271927849396,
+  "rms_jerk_mps3": 16.387980119398627,
+  "jerk_reduction_pct": -114.50235758375165,
+  "chunk_jump_ratio": 1.3004485495116036,
+  "total_successes": 5,
+  "total_rollouts": 5,
+  "all_jerks": [
+    13.600326604464497,
+    20.323457503178467,
+    14.532785849424316,
+    17.36948309895965,
+    16.113847540966223
+  ],
+  "all_jump_ratios": [
+    1.4333298129840661,
+    1.384192963909579,
+    1.1406730120641255,
+    1.4265032113296714,
+    1.1175437472705763
+  ],
+  "tasks": {
+    "pick up the black bowl between the plate and the ramekin and place it on the plate": {
+      "success_rate_pct": 100.0,
+      "successes": 5,
+      "total_episodes": 5,
+      "grasp_rate_pct": 100.0,
+      "grasps": 5,
+      "slip_rate_pct": 0.0,
+      "slips": 0,
+      "avg_steps_to_finish": 153.2,
+      "avg_successful_steps": 153.2,
+      "avg_jerk_mps3": 16.387980119398627,
+      "avg_chunk_jump_ratio": 1.3004485495116036,
+      "episodes": [
+        {
+          "episode": 1,
+          "status": "SUCCESS",
+          "steps": 160,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 13.600326604464497,
+          "chunk_jump_ratio": 1.4333298129840661
+        },
+        {
+          "episode": 2,
+          "status": "SUCCESS",
+          "steps": 152,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 20.323457503178467,
+          "chunk_jump_ratio": 1.384192963909579
+        },
+        {
+          "episode": 3,
+          "status": "SUCCESS",
+          "steps": 160,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 14.532785849424316,
+          "chunk_jump_ratio": 1.1406730120641255
+        },
+        {
+          "episode": 4,
+          "status": "SUCCESS",
+          "steps": 145,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 17.36948309895965,
+          "chunk_jump_ratio": 1.4265032113296714
+        },
+        {
+          "episode": 5,
+          "status": "SUCCESS",
+          "steps": 149,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 16.113847540966223,
+          "chunk_jump_ratio": 1.1175437472705763
+        }
+      ]
+    }
+  }
+}

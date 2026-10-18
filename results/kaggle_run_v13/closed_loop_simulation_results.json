@@ -1,0 +1,745 @@
+{
+  "overall_success_rate_pct": 44.0,
+  "ci_95_pct": 13.75914415943085,
+  "delta_vs_baseline_pct": -11.200000000000003,
+  "delta_ci_95_pct": 19.476049669273284,
+  "rms_jerk_mps3": 17.53508203297551,
+  "jerk_reduction_pct": -129.51678053632864,
+  "chunk_jump_ratio": 1.3567140574912644,
+  "total_successes": 22,
+  "total_rollouts": 50,
+  "all_jerks": [
+    20.32281402569333,
+    18.54484489329865,
+    12.966723696718256,
+    19.11560167377108,
+    17.32320179056295,
+    15.039593077617402,
+    55.966076331312344,
+    18.050436814711688,
+    14.990906788790149,
+    16.927059881984633,
+    27.413628195065225,
+    13.523380119378555,
+    12.741458629449237,
+    12.61553577698839,
+    74.2507004085908,
+    17.730775882905032,
+    16.416479562525062,
+    13.18566585817325,
+    18.744276785980684,
+    15.63626971266222,
+    9.05383584797105,
+    12.391299420311384,
+    8.834950464216494,
+    14.967176425572681,
+    8.39116200307334,
+    15.447170172472438,
+    18.7521415109204,
+    17.548342373486822,
+    22.79913726375566,
+    16.876926014517156,
+    14.941048752756398,
+    15.051568738437055,
+    12.593120115453338,
+    14.65019674681869,
+    12.683766612087707,
+    13.443387717326114,
+    15.164063087192497,
+    10.367628554130372,
+    16.31981913134914,
+    13.772724863653837,
+    19.26049700387206,
+    17.845674383930227,
+    14.471632712653449,
+    14.066152129631927,
+    15.28242940095692,
+    16.38752779978356,
+    15.246973415370311,
+    15.759591509482128,
+    15.459987722831613,
+    17.41873984858185
+  ],
+  "all_jump_ratios": [
+    1.5106146259313977,
+    1.317873611036859,
+    1.3753303381423585,
+    1.664218782570395,
+    1.0141411163623963,
+    1.566036410483227,
+    1.574604670856821,
+    1.184116221437083,
+    1.185198049362274,
+    1.167930405773126,
+    1.3177720266663977,
+    1.131465461537816,
+    1.26780373650481,
+    1.3285780782762624,
+    1.2055857826622371,
+    1.4987555691560768,
+    1.3448416702219632,
+    1.6024839582641255,
+    1.4117583205748505,
+    1.5135810598516255,
+    1.397366436550984,
+    1.394414311934601,
+    1.19635449301566,
+    1.4199668569464756,
+    1.4426324686489471,
+    1.3677140930032037,
+    1.3789333828688113,
+    1.327651367087339,
+    1.7009308579020395,
+    1.0086976212566146,
+    1.399929336485133,
+    1.286203888087624,
+    1.2732301499933307,
+    1.521321169293095,
+    1.4204496510536124,
+    1.375877780083161,
+    1.3614588403682593,
+    1.1561315236355052,
+    1.3235348239313371,
+    1.2509794432868193,
+    1.470907365409136,
+    1.216286864505387,
+    1.3029524360694773,
+    1.3048576689820905,
+    1.326117881229875,
+    1.5660318561847575,
+    1.4233136498820154,
+    1.4103990130898114,
+    1.3269293709416963,
+    1.3014383771643305
+  ],
+  "tasks": {
+    "pick up the black bowl between the plate and the ramekin and place it on the plate": {
+      "success_rate_pct": 100.0,
+      "successes": 5,
+      "total_episodes": 5,
+      "grasp_rate_pct": 100.0,
+      "grasps": 5,
+      "slip_rate_pct": 0.0,
+      "slips": 0,
+      "avg_steps_to_finish": 162.6,
+      "avg_successful_steps": 162.6,
+      "avg_jerk_mps3": 17.65463721600885,
+      "avg_chunk_jump_ratio": 1.3764356948086813,
+      "episodes": [
+        {
+          "episode": 1,
+          "status": "SUCCESS",
+          "steps": 155,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 20.32281402569333,
+          "chunk_jump_ratio": 1.5106146259313977
+        },
+        {
+          "episode": 2,
+          "status": "SUCCESS",
+          "steps": 164,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 18.54484489329865,
+          "chunk_jump_ratio": 1.317873611036859
+        },
+        {
+          "episode": 3,
+          "status": "SUCCESS",
+          "steps": 166,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 12.966723696718256,
+          "chunk_jump_ratio": 1.3753303381423585
+        },
+        {
+          "episode": 4,
+          "status": "SUCCESS",
+          "steps": 168,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 19.11560167377108,
+          "chunk_jump_ratio": 1.664218782570395
+        },
+        {
+          "episode": 5,
+          "status": "SUCCESS",
+          "steps": 160,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 17.32320179056295,
+          "chunk_jump_ratio": 1.0141411163623963
+        }
+      ]
+    },
+    "pick up the black bowl next to the ramekin and place it on the plate": {
+      "success_rate_pct": 80.0,
+      "successes": 4,
+      "total_episodes": 5,
+      "grasp_rate_pct": 100.0,
+      "grasps": 5,
+      "slip_rate_pct": 0.0,
+      "slips": 0,
+      "avg_steps_to_finish": 248.2,
+      "avg_successful_steps": 215.25,
+      "avg_jerk_mps3": 24.194814578883246,
+      "avg_chunk_jump_ratio": 1.3355771515825061,
+      "episodes": [
+        {
+          "episode": 1,
+          "status": "SUCCESS",
+          "steps": 233,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 15.039593077617402,
+          "chunk_jump_ratio": 1.566036410483227
+        },
+        {
+          "episode": 2,
+          "status": "FAILED",
+          "reason": "Timeout delivering to plate",
+          "steps": 380,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 55.966076331312344,
+          "chunk_jump_ratio": 1.574604670856821
+        },
+        {
+          "episode": 3,
+          "status": "SUCCESS",
+          "steps": 214,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 18.050436814711688,
+          "chunk_jump_ratio": 1.184116221437083
+        },
+        {
+          "episode": 4,
+          "status": "SUCCESS",
+          "steps": 219,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 14.990906788790149,
+          "chunk_jump_ratio": 1.185198049362274
+        },
+        {
+          "episode": 5,
+          "status": "SUCCESS",
+          "steps": 195,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 16.927059881984633,
+          "chunk_jump_ratio": 1.167930405773126
+        }
+      ]
+    },
+    "pick up the black bowl from table center and place it on the plate": {
+      "success_rate_pct": 0.0,
+      "successes": 0,
+      "total_episodes": 5,
+      "grasp_rate_pct": 100.0,
+      "grasps": 5,
+      "slip_rate_pct": 40.0,
+      "slips": 2,
+      "avg_steps_to_finish": 380.0,
+      "avg_successful_steps": null,
+      "avg_jerk_mps3": 28.108940625894444,
+      "avg_chunk_jump_ratio": 1.2502410171295046,
+      "episodes": [
+        {
+          "episode": 1,
+          "status": "FAILED",
+          "reason": "Bowl slipped during transport",
+          "steps": 380,
+          "bowl_lifted": true,
+          "bowl_slipped": true,
+          "rms_jerk_mps3": 27.413628195065225,
+          "chunk_jump_ratio": 1.3177720266663977
+        },
+        {
+          "episode": 2,
+          "status": "FAILED",
+          "reason": "Bowl dropped before delivery",
+          "steps": 380,
+          "bowl_lifted": false,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 13.523380119378555,
+          "chunk_jump_ratio": 1.131465461537816
+        },
+        {
+          "episode": 3,
+          "status": "FAILED",
+          "reason": "Bowl dropped before delivery",
+          "steps": 380,
+          "bowl_lifted": false,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 12.741458629449237,
+          "chunk_jump_ratio": 1.26780373650481
+        },
+        {
+          "episode": 4,
+          "status": "FAILED",
+          "reason": "Bowl dropped before delivery",
+          "steps": 380,
+          "bowl_lifted": false,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 12.61553577698839,
+          "chunk_jump_ratio": 1.3285780782762624
+        },
+        {
+          "episode": 5,
+          "status": "FAILED",
+          "reason": "Bowl slipped during transport",
+          "steps": 380,
+          "bowl_lifted": true,
+          "bowl_slipped": true,
+          "rms_jerk_mps3": 74.2507004085908,
+          "chunk_jump_ratio": 1.2055857826622371
+        }
+      ]
+    },
+    "pick up the black bowl on the cookie box and place it on the plate": {
+      "success_rate_pct": 60.0,
+      "successes": 3,
+      "total_episodes": 5,
+      "grasp_rate_pct": 100.0,
+      "grasps": 5,
+      "slip_rate_pct": 20.0,
+      "slips": 1,
+      "avg_steps_to_finish": 258.0,
+      "avg_successful_steps": 176.66666666666666,
+      "avg_jerk_mps3": 16.34269356044925,
+      "avg_chunk_jump_ratio": 1.4742841156137283,
+      "episodes": [
+        {
+          "episode": 1,
+          "status": "SUCCESS",
+          "steps": 150,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 17.730775882905032,
+          "chunk_jump_ratio": 1.4987555691560768
+        },
+        {
+          "episode": 2,
+          "status": "SUCCESS",
+          "steps": 201,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 16.416479562525062,
+          "chunk_jump_ratio": 1.3448416702219632
+        },
+        {
+          "episode": 3,
+          "status": "FAILED",
+          "reason": "Bowl dropped before delivery",
+          "steps": 380,
+          "bowl_lifted": false,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 13.18566585817325,
+          "chunk_jump_ratio": 1.6024839582641255
+        },
+        {
+          "episode": 4,
+          "status": "SUCCESS",
+          "steps": 179,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 18.744276785980684,
+          "chunk_jump_ratio": 1.4117583205748505
+        },
+        {
+          "episode": 5,
+          "status": "FAILED",
+          "reason": "Bowl slipped during transport",
+          "steps": 380,
+          "bowl_lifted": true,
+          "bowl_slipped": true,
+          "rms_jerk_mps3": 15.63626971266222,
+          "chunk_jump_ratio": 1.5135810598516255
+        }
+      ]
+    },
+    "pick up the black bowl in the top drawer of the wooden cabinet and place it on the plate": {
+      "success_rate_pct": 0.0,
+      "successes": 0,
+      "total_episodes": 5,
+      "grasp_rate_pct": 40.0,
+      "grasps": 2,
+      "slip_rate_pct": 20.0,
+      "slips": 1,
+      "avg_steps_to_finish": 380.0,
+      "avg_successful_steps": null,
+      "avg_jerk_mps3": 10.72768483222899,
+      "avg_chunk_jump_ratio": 1.3701469134193336,
+      "episodes": [
+        {
+          "episode": 1,
+          "status": "FAILED",
+          "reason": "Grasped empty air / missed bowl",
+          "steps": 380,
+          "bowl_lifted": false,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 9.05383584797105,
+          "chunk_jump_ratio": 1.397366436550984
+        },
+        {
+          "episode": 2,
+          "status": "FAILED",
+          "reason": "Bowl slipped during transport",
+          "steps": 380,
+          "bowl_lifted": true,
+          "bowl_slipped": true,
+          "rms_jerk_mps3": 12.391299420311384,
+          "chunk_jump_ratio": 1.394414311934601
+        },
+        {
+          "episode": 3,
+          "status": "FAILED",
+          "reason": "Grasped empty air / missed bowl",
+          "steps": 380,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 8.834950464216494,
+          "chunk_jump_ratio": 1.19635449301566
+        },
+        {
+          "episode": 4,
+          "status": "FAILED",
+          "reason": "Grasped empty air / missed bowl",
+          "steps": 380,
+          "bowl_lifted": false,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 14.967176425572681,
+          "chunk_jump_ratio": 1.4199668569464756
+        },
+        {
+          "episode": 5,
+          "status": "FAILED",
+          "reason": "Grasped empty air / missed bowl",
+          "steps": 380,
+          "bowl_lifted": false,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 8.39116200307334,
+          "chunk_jump_ratio": 1.4426324686489471
+        }
+      ]
+    },
+    "pick up the black bowl on the ramekin and place it on the plate": {
+      "success_rate_pct": 100.0,
+      "successes": 5,
+      "total_episodes": 5,
+      "grasp_rate_pct": 100.0,
+      "grasps": 5,
+      "slip_rate_pct": 0.0,
+      "slips": 0,
+      "avg_steps_to_finish": 179.0,
+      "avg_successful_steps": 179.0,
+      "avg_jerk_mps3": 18.284743467030495,
+      "avg_chunk_jump_ratio": 1.3567854644236017,
+      "episodes": [
+        {
+          "episode": 1,
+          "status": "SUCCESS",
+          "steps": 184,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 15.447170172472438,
+          "chunk_jump_ratio": 1.3677140930032037
+        },
+        {
+          "episode": 2,
+          "status": "SUCCESS",
+          "steps": 164,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 18.7521415109204,
+          "chunk_jump_ratio": 1.3789333828688113
+        },
+        {
+          "episode": 3,
+          "status": "SUCCESS",
+          "steps": 165,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 17.548342373486822,
+          "chunk_jump_ratio": 1.327651367087339
+        },
+        {
+          "episode": 4,
+          "status": "SUCCESS",
+          "steps": 216,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 22.79913726375566,
+          "chunk_jump_ratio": 1.7009308579020395
+        },
+        {
+          "episode": 5,
+          "status": "SUCCESS",
+          "steps": 166,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 16.876926014517156,
+          "chunk_jump_ratio": 1.0086976212566146
+        }
+      ]
+    },
+    "pick up the black bowl next to the cookie box and place it on the plate": {
+      "success_rate_pct": 40.0,
+      "successes": 2,
+      "total_episodes": 5,
+      "grasp_rate_pct": 100.0,
+      "grasps": 5,
+      "slip_rate_pct": 20.0,
+      "slips": 1,
+      "avg_steps_to_finish": 356.2,
+      "avg_successful_steps": 320.5,
+      "avg_jerk_mps3": 13.983940193110637,
+      "avg_chunk_jump_ratio": 1.3802268389825592,
+      "episodes": [
+        {
+          "episode": 1,
+          "status": "SUCCESS",
+          "steps": 360,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 14.941048752756398,
+          "chunk_jump_ratio": 1.399929336485133
+        },
+        {
+          "episode": 2,
+          "status": "SUCCESS",
+          "steps": 281,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 15.051568738437055,
+          "chunk_jump_ratio": 1.286203888087624
+        },
+        {
+          "episode": 3,
+          "status": "FAILED",
+          "reason": "Bowl slipped during transport",
+          "steps": 380,
+          "bowl_lifted": true,
+          "bowl_slipped": true,
+          "rms_jerk_mps3": 12.593120115453338,
+          "chunk_jump_ratio": 1.2732301499933307
+        },
+        {
+          "episode": 4,
+          "status": "FAILED",
+          "reason": "Bowl dropped before delivery",
+          "steps": 380,
+          "bowl_lifted": false,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 14.65019674681869,
+          "chunk_jump_ratio": 1.521321169293095
+        },
+        {
+          "episode": 5,
+          "status": "FAILED",
+          "reason": "Bowl dropped before delivery",
+          "steps": 380,
+          "bowl_lifted": false,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 12.683766612087707,
+          "chunk_jump_ratio": 1.4204496510536124
+        }
+      ]
+    },
+    "pick up the black bowl on the stove and place it on the plate": {
+      "success_rate_pct": 0.0,
+      "successes": 0,
+      "total_episodes": 5,
+      "grasp_rate_pct": 100.0,
+      "grasps": 5,
+      "slip_rate_pct": 0.0,
+      "slips": 0,
+      "avg_steps_to_finish": 380.0,
+      "avg_successful_steps": null,
+      "avg_jerk_mps3": 13.813524670730391,
+      "avg_chunk_jump_ratio": 1.2935964822610164,
+      "episodes": [
+        {
+          "episode": 1,
+          "status": "FAILED",
+          "reason": "Timeout delivering to plate",
+          "steps": 380,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 13.443387717326114,
+          "chunk_jump_ratio": 1.375877780083161
+        },
+        {
+          "episode": 2,
+          "status": "FAILED",
+          "reason": "Timeout delivering to plate",
+          "steps": 380,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 15.164063087192497,
+          "chunk_jump_ratio": 1.3614588403682593
+        },
+        {
+          "episode": 3,
+          "status": "FAILED",
+          "reason": "Bowl dropped before delivery",
+          "steps": 380,
+          "bowl_lifted": false,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 10.367628554130372,
+          "chunk_jump_ratio": 1.1561315236355052
+        },
+        {
+          "episode": 4,
+          "status": "FAILED",
+          "reason": "Timeout delivering to plate",
+          "steps": 380,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 16.31981913134914,
+          "chunk_jump_ratio": 1.3235348239313371
+        },
+        {
+          "episode": 5,
+          "status": "FAILED",
+          "reason": "Timeout delivering to plate",
+          "steps": 380,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 13.772724863653837,
+          "chunk_jump_ratio": 1.2509794432868193
+        }
+      ]
+    },
+    "pick up the black bowl next to the plate and place it on the plate": {
+      "success_rate_pct": 60.0,
+      "successes": 3,
+      "total_episodes": 5,
+      "grasp_rate_pct": 100.0,
+      "grasps": 5,
+      "slip_rate_pct": 20.0,
+      "slips": 1,
+      "avg_steps_to_finish": 272.8,
+      "avg_successful_steps": 201.33333333333334,
+      "avg_jerk_mps3": 16.185277126208916,
+      "avg_chunk_jump_ratio": 1.3242244432391932,
+      "episodes": [
+        {
+          "episode": 1,
+          "status": "SUCCESS",
+          "steps": 200,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 19.26049700387206,
+          "chunk_jump_ratio": 1.470907365409136
+        },
+        {
+          "episode": 2,
+          "status": "FAILED",
+          "reason": "Timeout delivering to plate",
+          "steps": 380,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 17.845674383930227,
+          "chunk_jump_ratio": 1.216286864505387
+        },
+        {
+          "episode": 3,
+          "status": "FAILED",
+          "reason": "Bowl slipped during transport",
+          "steps": 380,
+          "bowl_lifted": true,
+          "bowl_slipped": true,
+          "rms_jerk_mps3": 14.471632712653449,
+          "chunk_jump_ratio": 1.3029524360694773
+        },
+        {
+          "episode": 4,
+          "status": "SUCCESS",
+          "steps": 209,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 14.066152129631927,
+          "chunk_jump_ratio": 1.3048576689820905
+        },
+        {
+          "episode": 5,
+          "status": "SUCCESS",
+          "steps": 195,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 15.28242940095692,
+          "chunk_jump_ratio": 1.326117881229875
+        }
+      ]
+    },
+    "pick up the black bowl on the wooden cabinet and place it on the plate": {
+      "success_rate_pct": 0.0,
+      "successes": 0,
+      "total_episodes": 5,
+      "grasp_rate_pct": 100.0,
+      "grasps": 5,
+      "slip_rate_pct": 0.0,
+      "slips": 0,
+      "avg_steps_to_finish": 380.0,
+      "avg_successful_steps": null,
+      "avg_jerk_mps3": 16.05456405920989,
+      "avg_chunk_jump_ratio": 1.4056224534525223,
+      "episodes": [
+        {
+          "episode": 1,
+          "status": "FAILED",
+          "reason": "Timeout delivering to plate",
+          "steps": 380,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 16.38752779978356,
+          "chunk_jump_ratio": 1.5660318561847575
+        },
+        {
+          "episode": 2,
+          "status": "FAILED",
+          "reason": "Timeout delivering to plate",
+          "steps": 380,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 15.246973415370311,
+          "chunk_jump_ratio": 1.4233136498820154
+        },
+        {
+          "episode": 3,
+          "status": "FAILED",
+          "reason": "Timeout delivering to plate",
+          "steps": 380,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 15.759591509482128,
+          "chunk_jump_ratio": 1.4103990130898114
+        },
+        {
+          "episode": 4,
+          "status": "FAILED",
+          "reason": "Timeout delivering to plate",
+          "steps": 380,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 15.459987722831613,
+          "chunk_jump_ratio": 1.3269293709416963
+        },
+        {
+          "episode": 5,
+          "status": "FAILED",
+          "reason": "Timeout delivering to plate",
+          "steps": 380,
+          "bowl_lifted": true,
+          "bowl_slipped": false,
+          "rms_jerk_mps3": 17.41873984858185,
+          "chunk_jump_ratio": 1.3014383771643305
+        }
+      ]
+    }
+  }
+}

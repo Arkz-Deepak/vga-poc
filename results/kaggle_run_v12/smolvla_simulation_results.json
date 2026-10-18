@@ -1,0 +1,29 @@
+{
+  "model": "SmolVLA-450M (Baseline)",
+  "policy_path": "lerobot/smolvla_libero",
+  "n_action_steps": 10,
+  "total_rollouts": 1,
+  "overall_success_rate_pct": 0.0,
+  "mean_rms_jerk_mps3": 12.790177186134372,
+  "mean_chunk_jump_ratio": 1.0,
+  "task_results": [
+    {
+      "task_id": 0,
+      "task_name": "pick_up_the_black_bowl_between_the_plate",
+      "task_description": "pick up the black bowl between the plate and the ramekin and place it on the plate",
+      "success_rate_pct": 0.0,
+      "success_count": 0,
+      "total_episodes": 1,
+      "episodes": [
+        {
+          "episode": 1,
+          "status": "FAILED",
+          "steps": 280,
+          "bowl_lifted": false,
+          "rms_jerk_mps3": 12.790177186134372,
+          "chunk_jump_ratio": 1.0
+        }
+      ]
+    }
+  ]
+}

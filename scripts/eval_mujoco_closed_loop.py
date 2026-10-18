@@ -958,8 +958,8 @@ def run_closed_loop_evaluation(
                                 action_np[1] = float(unit_xy[1] * 0.08)
                                 action_np[2] = -0.28  # Decisive descent onto rim
 
-                        # Proximity guard: clamp only when centered and at grasp depth
-                        is_at_obj = (dist_xy_ee_bowl is not None and dist_xy_ee_bowl <= 6.5 and ee_z is not None and ee_z <= (ref_z + 0.024))
+                        # Proximity guard: clamp when centered over bowl rim and within finger height
+                        is_at_obj = (dist_xy_ee_bowl is not None and dist_xy_ee_bowl <= 5.5 and (ee_z is None or ee_z <= (ref_z + 0.052))) or (dist_ee_bowl is not None and dist_ee_bowl <= 5.5)
                         if proximity_guard and not is_at_obj:
                             action_np[6] = -1.0
                             if hasattr(policy, "gripper_controller") and policy.gripper_controller is not None:
@@ -1020,10 +1020,10 @@ def run_closed_loop_evaluation(
                     closed_steps += 1
                     if not has_grasped:
                         rim_ok = False
-                        if dist_xy_ee_bowl is not None and ee_z is not None:
-                            rim_ok = (dist_xy_ee_bowl <= 6.5 and ee_z <= (ref_z + 0.024))
+                        if dist_xy_ee_bowl is not None:
+                            rim_ok = (dist_xy_ee_bowl <= 5.5 and (ee_z is None or ee_z <= (ref_z + 0.052)))
                         elif dist_ee_bowl is not None:
-                            rim_ok = (dist_ee_bowl <= 6.8)
+                            rim_ok = (dist_ee_bowl <= 6.0)
                         else:
                             rim_ok = True
                         if rim_ok:

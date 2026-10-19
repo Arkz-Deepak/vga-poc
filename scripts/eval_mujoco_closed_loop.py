@@ -789,6 +789,7 @@ def run_closed_loop_evaluation(
             bowl_slipped = False
             has_grasped = False
             bowl_start_z = None
+            bowl_start_xy = None
             lift_steps = 0
             settle_counter = 0
             plate_descent_steps = 0
@@ -863,6 +864,7 @@ def run_closed_loop_evaluation(
                         bowl_z = float(bowl_pos[2])
                         if bowl_start_z is None:
                             bowl_start_z = bowl_z
+                            bowl_start_xy = bowl_pos[:2].copy()
 
                     if p_site_id is not None and p_site_id >= 0:
                         plate_pos = sim.data.site_xpos[p_site_id]
@@ -1010,11 +1012,19 @@ def run_closed_loop_evaluation(
                                     cruise_speed = 0.24 if norm_p > 0.10 else 0.16
                                     action_np[0] = float(unit_p[0] * cruise_speed)
                                     action_np[1] = float(unit_p[1] * cruise_speed)
-                                    min_flight_z = max(ref_z + 0.030, plate_z + 0.030)
-                                    if bowl_z is not None and bowl_z < min_flight_z:
-                                        action_np[2] = 0.08  # Ensure clearance over obstacles
+                                    # Closed-loop cruise altitude controller:
+                                    # Safe floor: plate_z + 0.065m clears all tabletop obstacles
+                                    target_cruise_z = plate_z + 0.065
+                                    # If starting from an elevated surface (cabinet/stove), hold source clearance until 8cm away from start
+                                    dist_from_start = float(np.linalg.norm(bowl_pos[:2] - bowl_start_xy)) if bowl_start_xy is not None else 0.10
+                                    if dist_from_start < 0.08 and ref_z > plate_z:
+                                        target_cruise_z = max(target_cruise_z, ref_z + 0.035)
+
+                                    if bowl_z is not None:
+                                        z_err = target_cruise_z - bowl_z
+                                        action_np[2] = float(np.clip(z_err * 2.5, -0.14, 0.12))
                                     else:
-                                        action_np[2] = 0.01  # Level flight
+                                        action_np[2] = 0.0
                                 else:
                                     # Dead center over plate basin (< 1.8cm, well inside BDDL 3.0cm threshold)
                                     plate_descent_steps += 1
@@ -1022,7 +1032,7 @@ def run_closed_loop_evaluation(
                                     action_np[1] = 0.0
                                     action_np[2] = -0.16
                                     # Enforce touchdown descent before opening fingers
-                                    if (bowl_z is not None and bowl_z <= (plate_z + 0.040)) or (ee_z is not None and ee_z <= (plate_z + 0.050)) or plate_descent_steps >= 70:
+                                    if (bowl_z is not None and bowl_z <= (plate_z + 0.040)) or (ee_z is not None and ee_z <= (plate_z + 0.050)) or plate_descent_steps >= 40:
                                         action_np[6] = -1.0
                                         if hasattr(policy, "gripper_controller") and policy.gripper_controller is not None:
                                             policy.gripper_controller.current_state = policy.gripper_controller.open_val
@@ -1060,7 +1070,7 @@ def run_closed_loop_evaluation(
                 # During grasp dwell/settle (assisted mode only): hold downward/level position so fingers firmly pinch rim before lifting
                 if not pure_policy and is_bowl_task and settle_counter > 0 and has_grasped and not bowl_lifted:
                     settle_counter -= 1
-                    action_np[2] = -0.05
+                    action_np[2] = 0.0
                     action_np[6] = 1.0
 
                 # Monitor gripper state changes with rich explanatory feedback

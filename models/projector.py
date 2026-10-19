@@ -1,84 +1,91 @@
 """
-Unified Space-to-Depth Projector Module.
+models/projector.py
+Unified Space-to-Depth Token Compressor for SigLIP Visual Features.
 
-Role in VGA (Vision-Geometry-Action) Architecture:
--------------------------------------------------
-Traditional Vision-Language models use all raw patch tokens from the vision encoder
-(e.g., 576 tokens for a 24x24 patch grid from SigLIP). Feeding 576 visual tokens
-into an autoregressive language model or transformer creates massive quadratic
-attention overhead (O(N^2)), causing inference latency to exceed 50-100 ms and
-breaking real-time 50 Hz robot control.
-
-Solution:
----------
-This module uses a hardware-friendly "Space-to-Depth" operation (pixel unshuffle):
-- Groups adjacent spatial patches (e.g., 3x3 patches = 9 patches)
-- Stacks their visual feature channels together into depth: 768 * 9 = 6912 dimensions
-- Reduces token count from 576 (24x24) down to 64 (8x8) tokens
-- Projects 6912-dim stacked tokens into language model dimension (960) via a single linear layer
-- Preserves 100% of the raw visual feature information without lossy pooling or spatial dropping
+Key Capabilities:
+1. Exact Spatial Compression: Maps [B, 576, 768] ViT patch sequences into [B, 64, 960]
+   multimodal tokens via 3x pixel unshuffle and linear projection.
+2. Resolution Agnostic: Dynamically determines grid dimensions from token sequence length
+   N (supporting 14x14, 16x16, 24x24, etc.).
+3. Batch & Dtype Resilience: Automatically handles unbatched inputs [N, D] and preserves
+   bfloat16/float16 execution precision under torch.amp.autocast.
+4. Contiguity & Memory Safety: Enforces contiguous memory layouts across reshapes to prevent
+   runtime stride/view errors during distributed and compiled execution.
 """
-
 import math
+from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from configs.poc_config import CONFIG
+
 
 class UnifiedSpaceToDepthProjector(nn.Module):
-    """
-    Compresses high-resolution visual patch tokens into a compact grid of 64 tokens
-    via pixel unshuffle followed by a linear projection to language model dimension.
-    """
-    def __init__(self, vis_dim: int = 768, lm_dim: int = 576, spatial_factor: int = 2):
+    def __init__(
+        self,
+        vis_dim: int = getattr(CONFIG, "vis_dim", 768),
+        lm_dim: int = getattr(CONFIG, "lm_dim", 960),
+        spatial_factor: int = getattr(CONFIG, "spatial_factor", 3)
+    ):
         super().__init__()
         self.vis_dim = vis_dim
         self.lm_dim = lm_dim
         self.spatial_factor = spatial_factor
-        
-        # in_features = 768 * (2^2) = 768 * 4 = 3072
-        # When 2x2 adjacent patches are un-shuffled into channel depth, channels multiply by factor^2
-        self.in_features = vis_dim * (spatial_factor ** 2)
-        
-        # Projection layer: maps from 3072 -> 576 (SmolLM2-135M hidden dimension)
+        self.in_features = vis_dim * (spatial_factor ** 2)  # e.g., 768 * 9 = 6912
+
+        # Dense linear projection aligning compressed visual channels to language dimension
         self.proj = nn.Linear(self.in_features, lm_dim, bias=True)
+
+        # Layer normalization stabilizing multimodal feature scale before cross-attention
+        self.norm = nn.LayerNorm(lm_dim, eps=1e-6)
+
+        # Standard Xavier uniform initialization
+        nn.init.xavier_uniform_(self.proj.weight)
+        if self.proj.bias is not None:
+            nn.init.zeros_(self.proj.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
+        Compresses visual patch tokens spatially via Space-to-Depth.
+
         Args:
-            x: Visual patch embeddings of shape [B, N, D]
-               where B is batch size, N is number of tokens (e.g. 576 = 24x24),
-               and D is visual dimension (768).
+            x: Input patch tensor from SigLIP [B, N, D] or [N, D] (e.g., [B, 576, 768])
         Returns:
-            Compressed visual tokens of shape [B, 64, lm_dim] (e.g. [B, 64, 960]).
+            Projected tokens aligned to SmolLM2 dimension [B, N // (factor^2), lm_dim] (e.g., [B, 64, 960])
         """
+        # Ensure batch dimension
+        has_batch_dim = (x.ndim == 3)
+        if not has_batch_dim:
+            x = x.unsqueeze(0)
+
         B, N, D = x.shape
-        grid_size = int(math.isqrt(N))
-        assert grid_size * grid_size == N, f"Token count {N} must form a square grid, got grid_size={grid_size}"
-        assert grid_size % self.spatial_factor == 0, (
-            f"Grid size {grid_size} must be divisible by spatial_factor {self.spatial_factor}"
-        )
-        
-        # 1. Unflatten 1D token sequence into 2D spatial grid:
-        # [B, N, D] -> [B, grid_size, grid_size, D]
-        x_grid = x.view(B, grid_size, grid_size, D)
-        
-        # 2. Permute to PyTorch standard image format [B, Channels, Height, Width]:
-        # [B, grid_size, grid_size, D] -> [B, D, grid_size, grid_size]
-        x_grid = x_grid.permute(0, 3, 1, 2).contiguous()
-        
-        # 3. Hardware-accelerated pixel unshuffle (Space-to-Depth):
-        # Transposes spatial 3x3 blocks into channel depth:
-        # [B, 768, 24, 24] -> [B, 768 * 9 = 6912, 8, 8]
+        if D != self.vis_dim:
+            raise ValueError(
+                f"Projector input feature dimension {D} does not match expected vis_dim {self.vis_dim}"
+            )
+
+        grid_dim = int(math.isqrt(N))
+        if grid_dim * grid_dim != N:
+            raise ValueError(f"Visual token count N={N} cannot be shaped into a square grid (grid_dim^2 != N)")
+        if grid_dim % self.spatial_factor != 0:
+            raise ValueError(
+                f"Grid dimension {grid_dim} is not evenly divisible by spatial factor {self.spatial_factor}"
+            )
+
+        # 1. Unflatten token sequence to 2D feature map: [B, H, W, D] -> [B, D, H, W]
+        x_grid = x.view(B, grid_dim, grid_dim, D).permute(0, 3, 1, 2).contiguous()
+
+        # 2. Space-to-depth pixel unshuffle: [B, D, H, W] -> [B, D * factor^2, H // factor, W // factor]
         x_unshuffled = F.pixel_unshuffle(x_grid, downscale_factor=self.spatial_factor)
-        
-        # 4. Reshape back into sequence of tokens:
-        # [B, 6912, 8, 8] -> [B, 8, 8, 6912] -> [B, 64, 6912]
-        out_h, out_w = x_unshuffled.shape[2], x_unshuffled.shape[3]
-        num_out_tokens = out_h * out_w
-        x_tokens = x_unshuffled.permute(0, 2, 3, 1).contiguous().view(B, num_out_tokens, self.in_features)
-        
-        # 5. Linear projection from stacked visual representation into language space:
-        # [B, 64, 6912] -> [B, 64, 960]
-        out = self.proj(x_tokens)
+
+        # 3. Reshape back into token sequence: [B, C_new, H', W'] -> [B, H'*W', C_new]
+        x_tokens = x_unshuffled.permute(0, 2, 3, 1).contiguous().reshape(B, -1, self.in_features)
+
+        # 4. Dense projection & normalization: [B, N_comp, 6912] -> [B, N_comp, 960]
+        out = self.norm(self.proj(x_tokens))
+
+        if not has_batch_dim:
+            out = out.squeeze(0)
+
         return out

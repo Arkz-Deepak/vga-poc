@@ -130,34 +130,54 @@ def main():
         except Exception:
             pass
 
-    print(f"🎯 Evaluating Policy Checkpoint: {ckpt_path}")
+    print(f"🎯 Evaluating Unified Policy Checkpoint: {ckpt_path}")
 
+    # Primary: Unified Dual-Camera Verified Harness with Cruise Altitude & Basin Descent
     eval_cmd = (
-        f"python {repo_dir}/scripts/eval_mujoco_closed_loop.py "
+        f"python {repo_dir}/scripts/eval_verified_poc.py "
         f"--checkpoint {ckpt_path} "
-        f"--all_tasks "
-        f"--num_episodes 5 "
+        f"--stats_path {repo_dir}/configs/action_stats_10shot.json "
+        f"--tasks all "
+        f"--num_trials 5 "
         f"--max_steps 500 "
+        f"--dual_camera "
         f"--friction_boost 3.5 "
-        f"--min_approach_steps 30 "
-        f"--schmitt_high 0.70 "
-        f"--schmitt_low 0.35 "
-        f"--proximity_guard "
         f"--video_dir {video_dir} "
         f"--output_json {results_dir}/closed_loop_simulation_results.json"
     )
-    run_cmd(eval_cmd, "Closed-Loop MuJoCo Simulation Benchmark (Operational Proximity Guard, Silicone Contact Friction)")
+    ret = run_cmd(eval_cmd, "Unified Dual-Camera Benchmark with Cruise Altitude & Basin Guidance", check=False)
+
+    if ret != 0 or not os.path.exists(f"{results_dir}/closed_loop_simulation_results.json"):
+        print("⚠️ Verified harness returned non-zero; falling back to standard closed-loop script...")
+        eval_fallback_cmd = (
+            f"python {repo_dir}/scripts/eval_mujoco_closed_loop.py "
+            f"--checkpoint {ckpt_path} "
+            f"--all_tasks "
+            f"--num_episodes 5 "
+            f"--max_steps 500 "
+            f"--friction_boost 3.5 "
+            f"--min_approach_steps 30 "
+            f"--schmitt_high 0.70 "
+            f"--schmitt_low 0.35 "
+            f"--proximity_guard "
+            f"--video_dir {video_dir} "
+            f"--output_json {results_dir}/closed_loop_simulation_results.json"
+        )
+        run_cmd(eval_fallback_cmd, "Fallback Closed-Loop Simulation Benchmark")
 
     # 8. Summary of VGA Results
     res_json = os.path.join(results_dir, "closed_loop_simulation_results.json")
     if os.path.exists(res_json):
         with open(res_json, "r") as f:
             data = json.load(f)
+        summary = data.get("summary", data)
+        sr_val = summary.get("overall_success_rate", data.get("overall_success_rate_pct", 0.0))
+        jerk_val = summary.get("mean_jerk_rms", data.get("rms_jerk_mps3", 0.0))
         print("\n" + "="*70)
         print("          OFFICIAL VGA CLOSED-LOOP BENCHMARK RESULTS")
         print("="*70)
-        print(f"Overall Success Rate: {data.get('overall_success_rate_pct', 0.0):.1f}%")
-        print(f"Mean RMS Jerk:        {data.get('rms_jerk_mps3', 0.0):.2f} m/s³")
+        print(f"Overall Success Rate: {sr_val:.1f}%")
+        print(f"Mean RMS Jerk:        {jerk_val:.2f} m/s³")
         print("="*70 + "\n")
 
     # 9. Benchmark SmolVLA-450M Baseline (Fast Baseline Verification)

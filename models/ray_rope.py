@@ -1,154 +1,166 @@
 """
-Decoupled Centroid Ray-RoPE (Rotary Position Embedding / Ray Grounding).
+models/ray_rope.py
 
-Role in VGA (Vision-Geometry-Action) Architecture:
--------------------------------------------------
-Standard 2D vision models treat camera images as flat pixel arrays. When controlling
-a robot arm in 3D space, flat 2D patches lack true metric distance and spatial orientation.
-As a result:
-- The robot misjudges object height and table distance, causing missed grasps and overshoot.
-- Usually, roboticists attach 3D LiDAR, RGB-D stereo cameras, or heavy neural depth networks
-  (e.g., Depth-Anything-V2), which adds 20-50 ms latency and breaks 50 Hz real-time loops.
+Continuous 3D Rotary Position Embeddings (Ray-RoPE) grounded in Metric Depth and Full SE(3) Pose.
 
-Solution:
----------
-Centroid Ray-RoPE provides "Zero-Overhead 3D Grounding":
-1. Each of the 64 visual tokens corresponds to an 8x8 spatial region on the image.
-2. Given camera intrinsics K and camera pose (rotation R_base_cam, translation t_base_cam),
-   we compute the exact 3D viewing ray in the robot's base coordinate frame for each token centroid.
-3. The camera origin t_base is projected into the language embedding dimension via an MLP.
-4. An attention pre-pass grounds the visual tokens in physical 3D space before action decoding.
-5. Latency cost: < 0.2 ms! Zero heavy depth networks required at test time.
+Modifications for Metric Grounding & Cross-Node Determinism:
+1. `generate_patch_rays` computes camera origins and SE(3)-rotated ray directions in strict IEEE-754
+   float32 precision (disabling bfloat16 autocast during pinhole inversion and R @ d_cam rotation).
+2. `ContinuousRayRoPE` resizes the deterministic depth map to match the patch grid resolution and
+   reconstructs metric 3D coordinates (Origin + Direction * Depth) in float32 before computing
+   trigonometric RoPE frequencies.
 """
-
+import math
 from typing import Optional
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
-class CentroidRayRoPE(nn.Module):
+def generate_patch_rays(
+    t_base_cam: torch.Tensor,
+    cam_intrinsics: torch.Tensor,
+    img_size: int = 384,
+    patch_size: int = 16
+) -> torch.Tensor:
     """
-    Assigns 3D physical ray directions and camera position vectors to the 64 visual tokens.
+    Generates 3D ray origins and unnormalized directions for each image patch in strict float32.
+    Returns tensor of shape [B, N, 6] where [..., :3] is Origin and [..., 3:] is Direction.
     """
-    def __init__(self, lm_dim: int = 576, num_heads: int = 8, origin_hidden: int = 256):
-        super().__init__()
-        self.lm_dim = lm_dim
-        self.num_heads = num_heads
+    B = t_base_cam.shape[0]
+    device = t_base_cam.device
 
-        # Camera translation MLP: maps 3D camera origin coordinates in base frame (x, y, z) -> lm_dim
-        self.origin_mlp = nn.Sequential(
-            nn.Linear(3, origin_hidden),
-            nn.SiLU(),
-            nn.Linear(origin_hidden, lm_dim)
-        )
+    with torch.amp.autocast(device_type="cuda" if device.type == "cuda" else "cpu", enabled=False):
+        t_base_f32 = t_base_cam.float()
+        intrinsics_f32 = cam_intrinsics.float()
 
-        # Optional ray direction projection: maps 3D unit direction vector (dx, dy, dz) on S^2 -> lm_dim
-        self.ray_mlp = nn.Sequential(
-            nn.Linear(3, origin_hidden),
-            nn.SiLU(),
-            nn.Linear(origin_hidden, lm_dim)
-        )
+        # Calculate grid size (e.g., 128 // 16 = 8 -> 64 patches)
+        grid_size = img_size // patch_size
+        num_patches = grid_size * grid_size
 
-        # Lightweight pre-pass self-attention layer to fuse visual features with 3D physical coordinates
-        self.pre_pass_attn = nn.MultiheadAttention(
-            embed_dim=lm_dim,
-            num_heads=num_heads,
-            batch_first=True
-        )
-        
-        # Layer normalization for stability
-        self.norm = nn.LayerNorm(lm_dim)
+        # Create pixel grid representing the centers of patches in float32
+        u = torch.arange(patch_size // 2, img_size, patch_size, device=device, dtype=torch.float32)
+        v = torch.arange(patch_size // 2, img_size, patch_size, device=device, dtype=torch.float32)
+        grid_v, grid_u = torch.meshgrid(v, u, indexing="ij")
 
-    @staticmethod
-    def compute_centroid_rays(
-        K: torch.Tensor,
-        R_base_cam: torch.Tensor,
-        img_w: int = 256,
-        img_h: int = 256,
-        device: torch.device = torch.device("cpu")
-    ) -> torch.Tensor:
-        """
-        Computes 3D unit ray direction vectors for the 8x8 centroid grid in the robot's base coordinate frame.
+        # Pixels in homogeneous coordinates: [B, 3, N]
+        uv = torch.stack([grid_u.flatten(), grid_v.flatten(), torch.ones_like(grid_u.flatten())], dim=-1)
+        uv = uv.unsqueeze(0).expand(B, -1, -1).transpose(1, 2)
 
-        Args:
-            K: Camera intrinsic matrix [3, 3] or [B, 3, 3]
-               [[fx,  0, cx],
-                [ 0, fy, cy],
-                [ 0,  0,  1]]
-            R_base_cam: Rotation matrix from camera frame to robot base frame [3, 3] or [B, 3, 3]
-            img_w: Image width (e.g. 256)
-            img_h: Image height (e.g. 256)
-            device: Target torch device
+        # Inverse intrinsics to get camera-frame unnormalized rays (where Z=1)
+        inv_K = torch.linalg.inv(intrinsics_f32)
+        rays_cam_unnorm = torch.bmm(inv_K, uv)  # [B, 3, N]
 
-        Returns:
-            rays_base: [64, 3] or [B, 64, 3] unit direction vectors in robot base coordinate frame (S^2 sphere).
-        """
-        # 1. Compute pixel coordinates at the centers (centroids) of the 8x8 patches
-        coords = torch.arange(8, device=device, dtype=torch.float32) + 0.5
-        u = coords * (img_w / 8.0)  # [8] pixel horizontal coords
-        v = coords * (img_h / 8.0)  # [8] pixel vertical coords
-        grid_v, grid_u = torch.meshgrid(v, u, indexing='ij')  # shape: [8, 8]
-
-        # 2. Convert to homogeneous 2D coordinates: [64, 3] -> [u, v, 1]
-        pixels = torch.stack([grid_u.flatten(), grid_v.flatten(), torch.ones(64, device=device)], dim=1) # [64, 3]
-
-        # Handle batched or unbatched inputs
-        if K.dim() == 2:
-            K_inv = torch.inverse(K.to(device).float())
-            # Ray direction in camera frame: r = K_inv * [u, v, 1]^T
-            rays_cam = (K_inv @ pixels.T).T  # [64, 3]
-            # Normalize to unit vectors on S^2 sphere
-            rays_unit = rays_cam / (torch.norm(rays_cam, dim=-1, keepdim=True) + 1e-8)
-            # Transform from camera frame into robot base reference frame: d_k = R_base_cam * r_k
-            rays_base = (R_base_cam.to(device).float() @ rays_unit.T).T  # [64, 3]
+        # Transform to base frame using full SE(3) camera extrinsics (Rotation R + Translation T)
+        if t_base_f32.shape[-1] == 4:
+            R = t_base_f32[:, :3, :3]
+            T = t_base_f32[:, :3, 3].unsqueeze(-1).expand(-1, -1, num_patches)  # [B, 3, N]
         else:
-            # Batched case: K is [B, 3, 3], R_base_cam is [B, 3, 3]
-            B = K.shape[0]
-            K_inv = torch.inverse(K.to(device).float())  # [B, 3, 3]
-            # pixels: [1, 64, 3] -> pixels.transpose(1, 2) is [1, 3, 64]
-            pixels_b = pixels.unsqueeze(0).expand(B, -1, -1).transpose(1, 2)  # [B, 3, 64]
-            rays_cam = torch.bmm(K_inv, pixels_b).transpose(1, 2)             # [B, 64, 3]
-            rays_unit = rays_cam / (torch.norm(rays_cam, dim=-1, keepdim=True) + 1e-8)
-            rays_base = torch.bmm(R_base_cam.to(device).float(), rays_unit.transpose(1, 2)).transpose(1, 2) # [B, 64, 3]
+            R = t_base_f32[:, :3, :3]
+            T = torch.zeros_like(rays_cam_unnorm)
 
-        return rays_base
+        # Rotate ray directions into the robot base frame
+        rays_base_dir = torch.bmm(R, rays_cam_unnorm)  # [B, 3, N]
+
+        # Transpose to sequence format [B, N, 3]
+        rays_base_dir = rays_base_dir.transpose(1, 2)
+        origin_base = T.transpose(1, 2)
+
+        # Concatenate origin and direction into a single float32 tensor [B, N, 6]
+        return torch.cat([origin_base, rays_base_dir], dim=-1)
+
+
+class ContinuousRayRoPE(nn.Module):
+    def __init__(self, head_dim: int, base: float = 10000.0):
+        super().__init__()
+        # For 3D spatial encoding, head_dim must be divisible by 6
+        # (3 axes * 2 for real/imaginary pairs per axis)
+        if head_dim % 6 != 0:
+            raise ValueError(f"ContinuousRayRoPE requires head_dim to be divisible by 6. Got {head_dim}.")
+
+        self.dim_per_axis = head_dim // 3
+        self.disable_ray_rope = False
+
+        # Calculate inverse frequencies using the standard RoPE base formulation
+        inv_freq = 1.0 / (base ** (torch.arange(0, self.dim_per_axis, 2).float() / self.dim_per_axis))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
 
     def forward(
         self,
-        visual_tokens: torch.Tensor,
-        t_base_cam: torch.Tensor,
-        rays_base: Optional[torch.Tensor] = None
+        x: torch.Tensor,
+        rays: torch.Tensor,
+        depth_map: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
+        Applies Metric 3D Ray-RoPE to the input tensor.
+
         Args:
-            visual_tokens: Compressed visual features of shape [B, 64, lm_dim]
-            t_base_cam: Camera translation in robot base frame of shape [B, 3]
-            rays_base: Optional 3D unit ray directions of shape [B, 64, 3]
-
-        Returns:
-            Geometrically grounded visual tokens of shape [B, 64, lm_dim]
+            x: Attention Query/Key tensor [batch_size, seq_len, num_heads, head_dim]
+            rays: Tensor of shape [batch_size, seq_len, 6] representing origin and direction.
+            depth_map: Metric depth prior from frozen foundation model [batch_size, 1, H, W]
         """
-        B, N, D = visual_tokens.shape
-        assert N == 64, f"Expected 64 visual tokens, got {N}"
+        if self.disable_ray_rope:
+            return x
 
-        # 1. Project camera origin translation into embedding space: [B, 3] -> [B, 1, lm_dim]
-        t_embed = self.origin_mlp(t_base_cam).unsqueeze(1)
+        batch_size, seq_len, num_heads, head_dim = x.shape
 
-        # 2. Add translation embedding to all visual tokens (broadcasted across the 64 tokens)
-        tokens_augmented = visual_tokens + t_embed
+        with torch.amp.autocast(device_type="cuda" if x.device.type == "cuda" else "cpu", enabled=False):
+            rays_f32 = rays.float()
 
-        # 3. If explicit ray directions are provided, embed and add them per token
-        if rays_base is not None:
-            # [B, 64, 3] -> [B, 64, lm_dim]
-            ray_embed = self.ray_mlp(rays_base)
-            tokens_augmented = tokens_augmented + ray_embed
+            if depth_map is not None:
+                # 1. Resize the high-res depth map to match the vision transformer's patch grid
+                grid_size = int(math.sqrt(seq_len))
+                depth_resized = F.interpolate(
+                    depth_map.float(),
+                    size=(grid_size, grid_size),
+                    mode="bilinear",
+                    align_corners=False
+                )
 
-        # 4. Multi-head self-attention pre-pass to contextualize 3D geometry across tokens
-        attn_out, _ = self.pre_pass_attn(
-            query=tokens_augmented,
-            key=tokens_augmented,
-            value=tokens_augmented
-        )
+                # Flatten to [B, N, 1]
+                depth_flat = depth_resized.view(batch_size, 1, -1).transpose(1, 2)
 
-        # Residual connection + LayerNorm
-        return self.norm(tokens_augmented + attn_out)
+                # 2. Compute absolute metric 3D point cloud coordinate: Origin + (Direction * Depth)
+                if rays_f32.shape[-1] == 6:
+                    origin = rays_f32[..., :3]
+                    direction = rays_f32[..., 3:]
+                    coords = origin + (direction * depth_flat)
+                else:
+                    coords = rays_f32 * depth_flat
+            else:
+                # Fallback to normalized directional rays if depth isn't active
+                if rays_f32.shape[-1] == 6:
+                    coords = F.normalize(rays_f32[..., 3:], p=2, dim=-1)
+                else:
+                    coords = rays_f32
+
+            # Unbind the continuous 3D coordinates -> 3 tensors of shape [batch_size, seq_len]
+            pos_x, pos_y, pos_z = coords.unbind(-1)
+
+            inv_freq = self.inv_freq.to(x.device, dtype=torch.float32)
+
+            freqs_x = torch.einsum("bs,d->bsd", pos_x, inv_freq)
+            freqs_y = torch.einsum("bs,d->bsd", pos_y, inv_freq)
+            freqs_z = torch.einsum("bs,d->bsd", pos_z, inv_freq)
+
+            # Concatenate frequencies for all 3 axes: [batch_size, seq_len, head_dim // 2]
+            freqs = torch.cat([freqs_x, freqs_y, freqs_z], dim=-1)
+
+            # Broadcast to match num_heads: [batch_size, seq_len, 1, head_dim // 2]
+            freqs = freqs.unsqueeze(2).expand(-1, -1, num_heads, -1)
+
+            # Interleave sines and cosines
+            emb = torch.cat((freqs, freqs), dim=-1)
+            cos_emb = emb.cos().to(x.dtype)
+            sin_emb = emb.sin().to(x.dtype)
+
+        # Apply the rotary transformation
+        x_rotated = (x * cos_emb) + (self._rotate_half(x) * sin_emb)
+        return x_rotated
+
+    @staticmethod
+    def _rotate_half(x: torch.Tensor) -> torch.Tensor:
+        """Rotates half the hidden dims of the input."""
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)

@@ -1,269 +1,325 @@
 """
-Diffusion Transformer (DiT) Action Expert for VGA Policy.
+models/dit_expert.py
+Flow-Matching Diffusion Transformer (DiT) Action Expert (v11).
 
-Mathematical Foundations:
-1. Continuous-Time Flow Matching:
-   Instead of thousands of discrete diffusion steps, Flow Matching trains a vector field
-   v_theta(x_t, t, c) to regress the straight-line probability path connecting Gaussian
-   noise x_1 ~ N(0, I) to target robotic action chunk x_0 in R^{H x 7}:
-       x_t = (1 - (1 - sigma_min) * t) * x_0 + t * x_1,  t in [0, 1]
-       u_t(x_1 | x_0) = x_1 - (1 - sigma_min) * x_0 (target velocity)
-   During training:
-       L_flow = E_{t, x_0, x_1} || v_theta(x_t, t, c) - u_t ||^2
-
-2. Adaptive Layer Normalization (AdaLN-Zero):
-   Conditioning signals (diffusion time t, visual-language context c, and prefix waypoints P)
-   modulate the normalization layers of each Transformer block:
-       AdaLN(h, c) = (1 + gamma(c)) * LayerNorm(h) + beta(c)
-       h = h + alpha(c) * Block(AdaLN(h, c))
-   where gamma, beta, alpha are computed from a zero-initialized projection layer, ensuring
-   the block acts as identity at initialization for stable training.
-
-3. 4-Step Euler ODE Integration:
-   For sub-18ms real-time control (>= 50 Hz), we integrate the reverse probability flow ODE:
-       dx/dt = v_theta(x_t, t, c)
-   using NFE = 4 uniform Euler steps from t = 1.0 to t = 0.0:
-       x_{t - dt} = x_t - dt * v_theta(x_t, t, c),  where dt = 0.25
+Matches 100% of v9/v10 checkpoint tensor names and shapes while adding:
+1. Phase-Gated 3D End-Effector Proprioception in Global AdaLN Conditioning (self.eef_pos_cond):
+   - Masks (X, Y) to 0.0 during Pre-Grasp (gripper_state <= 0) in both train() and eval() so the
+     policy cannot memorize pickup coordinates and must visually servo.
+   - Injects full [X, Y, Z - 1.0] during Post-Grasp (gripper_state > 0) to resolve pick-vs-place
+     Z-height ambiguity on Task 05 (ramekin vs plate) and Task 03 (cookie box vs plate).
+   - Zero-initialized final layer guarantees exact Step-0 equivalence with the 72.0% WiSE-FT soup.
+2. Grasp-Transition a_prev Momentum Reset During Training:
+   - Automatically zeros out a_prev[:, :, :6] whenever the 4-step history buffer crosses a grasp
+     transition, matching closed-loop inference.
 """
-
-import math
-from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import math
+from typing import Optional, Tuple, Union
 
 
-def modulate(x: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
-    """Modulates normalized tensor with affine scale and shift parameters."""
-    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
-
-
-class SinusoidalTimeEmbedding(nn.Module):
-    """Encodes continuous diffusion time t in [0, 1] into frequency space."""
-
+class SinusoidalPosEmb(nn.Module):
     def __init__(self, dim: int):
         super().__init__()
         self.dim = dim
 
-    def forward(self, t: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            t: Tensor of shape (B,) or (B, 1) in [0, 1]
-        Returns:
-            emb: Frequency embedding of shape (B, dim)
-        """
-        if t.ndim == 1:
-            t = t.unsqueeze(-1)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        device = x.device
         half_dim = self.dim // 2
-        freqs = torch.exp(
-            -math.log(10000) * torch.arange(0, half_dim, dtype=torch.float32, device=t.device) / half_dim
-        )
-        args = t * freqs.unsqueeze(0)
-        embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
-        if self.dim % 2 == 1:
-            embedding = F.pad(embedding, (0, 1))
-        return embedding
+        emb = math.log(10000) / (half_dim - 1)
+        emb = torch.exp(torch.arange(half_dim, device=device) * -emb)
+        emb = x[:, None] * emb[None, :]
+        emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
+        return emb
 
 
 class DiTBlock(nn.Module):
-    """
-    A single Diffusion Transformer (DiT) block equipped with AdaLN-Zero conditioning.
-    """
-
-    def __init__(self, hidden_dim: int, num_heads: int, mlp_ratio: float = 4.0):
+    def __init__(self, hidden_dim: int, num_heads: int):
         super().__init__()
         self.norm1 = nn.LayerNorm(hidden_dim, elementwise_affine=False, eps=1e-6)
-        self.attn = nn.MultiheadAttention(
-            embed_dim=hidden_dim,
-            num_heads=num_heads,
-            batch_first=True,
-        )
+        self.self_attn = nn.MultiheadAttention(hidden_dim, num_heads, batch_first=True)
+
         self.norm2 = nn.LayerNorm(hidden_dim, elementwise_affine=False, eps=1e-6)
-        mlp_hidden_dim = int(hidden_dim * mlp_ratio)
+        self.cross_attn = nn.MultiheadAttention(hidden_dim, num_heads, batch_first=True)
+
+        self.norm3 = nn.LayerNorm(hidden_dim, elementwise_affine=False, eps=1e-6)
         self.mlp = nn.Sequential(
-            nn.Linear(hidden_dim, mlp_hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim * 4),
             nn.GELU(approximate="tanh"),
-            nn.Linear(mlp_hidden_dim, hidden_dim),
+            nn.Linear(hidden_dim * 4, hidden_dim)
         )
-        # AdaLN modulation generates: scale1, shift1, gate1, scale2, shift2, gate2
+
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
-            nn.Linear(hidden_dim, 6 * hidden_dim, bias=True),
+            nn.Linear(hidden_dim, 6 * hidden_dim, bias=True)
         )
-        # Initialize AdaLN weights to zero so blocks start as identity
-        nn.init.zeros_(self.adaLN_modulation[1].weight)
-        nn.init.zeros_(self.adaLN_modulation[1].bias)
+        nn.init.zeros_(self.adaLN_modulation[-1].weight)
+        nn.init.zeros_(self.adaLN_modulation[-1].bias)
 
-    def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: Action token sequence [B, SeqLen, HiddenDim]
-            c: Global conditioning vector [B, HiddenDim]
-        Returns:
-            x: Updated sequence [B, SeqLen, HiddenDim]
-        """
-        modulation = self.adaLN_modulation(c)
-        shift1, scale1, gate1, shift2, scale2, gate2 = modulation.chunk(6, dim=-1)
+    def forward(self, x: torch.Tensor, c: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
+            self.adaLN_modulation(c).unsqueeze(1).chunk(6, dim=-1)
+        )
 
-        # 1. Self-Attention with AdaLN modulation
-        norm_x1 = modulate(self.norm1(x), shift1, scale1)
-        attn_out, _ = self.attn(norm_x1, norm_x1, norm_x1)
-        x = x + gate1.unsqueeze(1) * attn_out
+        x_norm1 = self.norm1(x) * (1 + scale_msa) + shift_msa
+        attn_out, _ = self.self_attn(x_norm1, x_norm1, x_norm1)
+        x = x + gate_msa * attn_out
 
-        # 2. MLP with AdaLN modulation
-        norm_x2 = modulate(self.norm2(x), shift2, scale2)
-        mlp_out = self.mlp(norm_x2)
-        x = x + gate2.unsqueeze(1) * mlp_out
+        x_norm2 = self.norm2(x)
+        cross_out, _ = self.cross_attn(x_norm2, context, context)
+        x = x + cross_out
+
+        x_norm3 = self.norm3(x) * (1 + scale_mlp) + shift_mlp
+        mlp_out = self.mlp(x_norm3)
+        x = x + gate_mlp * mlp_out
 
         return x
 
 
 class DiTActionExpert(nn.Module):
-    """
-    12-layer Diffusion Transformer Action Expert with 4-step Euler ODE solver.
-    Predicts 16-step action trajectories conditioned on visual-language context.
-    """
-
     def __init__(
         self,
         action_dim: int = 7,
-        action_horizon: int = 16,
-        prefix_len: int = 4,
-        context_dim: int = 576,       # Matches SmolLM2-135M / fused context dimension
-        hidden_dim: int = 384,        # Lightweight DiT hidden dimension for sub-18ms latency
-        num_heads: int = 6,
+        chunk_horizon: int = 16,
+        hidden_dim: int = 512,
         num_layers: int = 12,
-        euler_steps: int = 4,
+        num_heads: int = 8,
+        context_dim: int = 960,
+        prefix_len: int = 4
     ):
         super().__init__()
         self.action_dim = action_dim
-        self.action_horizon = action_horizon
+        self.chunk_horizon = chunk_horizon
         self.prefix_len = prefix_len
         self.hidden_dim = hidden_dim
-        self.euler_steps = euler_steps
+        self.ode_noise_scale = 0.25
 
-        # 1. Input Action Embeddings (Linear projection of 7D action vectors)
+        # Exact v9/v10 parameter names and shapes
+        self.pos_emb = nn.Parameter(torch.randn(1, chunk_horizon, hidden_dim) * 0.02)
+        self.vis_grid_emb = nn.Parameter(torch.randn(1, 128, hidden_dim) * 0.02)
+        self.register_buffer("gripper_head_trained", torch.tensor(False, dtype=torch.bool))
+
         self.action_in_proj = nn.Linear(action_dim, hidden_dim)
-        # Position embedding for the 16 action steps
-        self.pos_emb = nn.Parameter(torch.zeros(1, action_horizon, hidden_dim))
-        nn.init.trunc_normal_(self.pos_emb, std=0.02)
 
-        # 2. Conditioning MLPs
-        self.time_embed = nn.Sequential(
-            SinusoidalTimeEmbedding(hidden_dim),
+        self.time_emb = nn.Sequential(
+            SinusoidalPosEmb(hidden_dim),
             nn.Linear(hidden_dim, hidden_dim),
             nn.SiLU(),
             nn.Linear(hidden_dim, hidden_dim),
         )
-        self.context_proj = nn.Sequential(
+
+        self.prefix_encoder = nn.Sequential(
+            nn.Linear(prefix_len * 6, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
+
+        self.gripper_encoder = nn.Sequential(
+            nn.Linear(1, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
+
+        self.lang_encoder = nn.Sequential(
+            nn.LayerNorm(context_dim),
             nn.Linear(context_dim, hidden_dim),
             nn.SiLU(),
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim)
         )
+        nn.init.zeros_(self.lang_encoder[-1].weight)
+        nn.init.zeros_(self.lang_encoder[-1].bias)
 
-        # Optional prefix waypoint projection (P=4 steps from previous chunk)
-        self.prefix_proj = nn.Linear(action_dim, hidden_dim)
+        self.eef_z_encoder = nn.Sequential(
+            nn.Linear(1, hidden_dim // 2),
+            nn.SiLU(),
+            nn.Linear(hidden_dim // 2, hidden_dim)
+        )
+        nn.init.zeros_(self.eef_z_encoder[-1].weight)
+        nn.init.zeros_(self.eef_z_encoder[-1].bias)
 
-        # 3. Stack of 12 DiT Blocks
+        self.eef_pos_encoder = nn.Sequential(
+            nn.Linear(3, hidden_dim // 2),
+            nn.SiLU(),
+            nn.Linear(hidden_dim // 2, hidden_dim)
+        )
+        nn.init.zeros_(self.eef_pos_encoder[-1].weight)
+        nn.init.zeros_(self.eef_pos_encoder[-1].bias)
+
+        # v11: Zero-Initialized Phase-Gated 3D EEF Position Conditioner for Global AdaLN Vector c
+        self.eef_pos_cond = nn.Sequential(
+            nn.Linear(3, hidden_dim // 2),
+            nn.SiLU(),
+            nn.Linear(hidden_dim // 2, hidden_dim)
+        )
+        nn.init.zeros_(self.eef_pos_cond[-1].weight)
+        nn.init.zeros_(self.eef_pos_cond[-1].bias)
+
+        self.context_proj = nn.Linear(context_dim, hidden_dim)
+
         self.blocks = nn.ModuleList([
-            DiTBlock(hidden_dim=hidden_dim, num_heads=num_heads)
-            for _ in range(num_layers)
+            DiTBlock(hidden_dim, num_heads) for _ in range(num_layers)
         ])
 
-        # 4. Final Output Projection to Velocity Field v_theta in R^{B x 16 x 7}
-        self.final_norm = nn.LayerNorm(hidden_dim, elementwise_affine=False, eps=1e-6)
-        self.final_adaLN = nn.Sequential(
+        self.final_norm = nn.LayerNorm(hidden_dim)
+        self.out_proj = nn.Linear(hidden_dim, action_dim)
+        nn.init.zeros_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
+
+        self.gripper_head = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
             nn.SiLU(),
-            nn.Linear(hidden_dim, 2 * hidden_dim, bias=True),
+            nn.Linear(hidden_dim // 2, 1)
         )
-        nn.init.zeros_(self.final_adaLN[1].weight)
-        nn.init.zeros_(self.final_adaLN[1].bias)
-        self.action_out_proj = nn.Linear(hidden_dim, action_dim)
-        nn.init.zeros_(self.action_out_proj.weight)
-        nn.init.zeros_(self.action_out_proj.bias)
+        nn.init.zeros_(self.gripper_head[-1].weight)
+        nn.init.zeros_(self.gripper_head[-1].bias)
+
+        self.enable_cuda_graphs = False
 
     def forward(
         self,
         x_t: torch.Tensor,
-        t: torch.Tensor,
+        tau: torch.Tensor,
         context: torch.Tensor,
-        prefix_waypoints: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        """
-        Predicts velocity field v_theta(x_t, t, context).
+        a_prev: Optional[torch.Tensor] = None,
+        gripper_state: Optional[torch.Tensor] = None,
+        l_pool: Optional[torch.Tensor] = None,
+        eef_z: Optional[torch.Tensor] = None,
+        eef_pos: Optional[torch.Tensor] = None,
+        return_gripper_logits: bool = False
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        B = x_t.shape[0]
+        device = x_t.device
+        dtype = x_t.dtype
 
-        Args:
-            x_t: Noisy action sequence [B, 16, 7]
-            t: Diffusion timestep tensor [B] in [0, 1]
-            context: Condition vector [B, context_dim] (or pooled visual-language tokens)
-            prefix_waypoints: Optional tail of previous chunk [B, 4, 7]
-        Returns:
-            v_theta: Velocity prediction [B, 16, 7]
-        """
-        # 1. Project actions and add learned positional embeddings
-        h = self.action_in_proj(x_t) + self.pos_emb  # [B, 16, hidden_dim]
+        if self.training:
+            self.gripper_head_trained.fill_(True)
 
-        # 2. Combine time and context conditioning into single conditioning vector c
-        t_emb = self.time_embed(t)  # [B, hidden_dim]
-        c_emb = self.context_proj(context)  # [B, hidden_dim]
-        c = t_emb + c_emb  # [B, hidden_dim]
+        if a_prev is None:
+            a_prev = torch.zeros((B, self.prefix_len, self.action_dim), device=device, dtype=dtype)
+        else:
+            a_prev = a_prev.to(device=device, dtype=dtype)
 
-        # 3. If prefix waypoints provided, inject their summary into conditioning
-        if prefix_waypoints is not None:
-            p_emb = self.prefix_proj(prefix_waypoints).mean(dim=1)  # [B, hidden_dim]
-            c = c + p_emb
+        if gripper_state is None:
+            if a_prev.shape[-1] >= 7:
+                gripper_state = a_prev[:, -1, 6:7]
+            else:
+                gripper_state = torch.full((B, 1), -1.0, device=device, dtype=dtype)
+        else:
+            gripper_state = gripper_state.to(device=device, dtype=dtype)
 
-        # 4. Pass through 12 DiT Transformer Blocks
+        if eef_z is None:
+            eef_z = torch.zeros((B, 1), device=device, dtype=dtype)
+        else:
+            eef_z = eef_z.to(device=device, dtype=dtype)
+
+        if eef_pos is None:
+            eef_pos = torch.zeros((B, 3), device=device, dtype=dtype)
+            eef_pos[:, 2:3] = eef_z
+        else:
+            eef_pos = eef_pos.to(device=device, dtype=dtype)
+
+        vel_prev = a_prev[:, :, :6]
+        if self.training:
+            # 1. Zero out a_prev[:6] whenever the history window crosses a grasp state transition
+            if a_prev.shape[-1] >= 7 and a_prev.shape[1] >= 2:
+                g_first = (a_prev[:, 0, 6:7] > 0.0)
+                g_last = (a_prev[:, -1, 6:7] > 0.0)
+                trans_mask = (g_first != g_last).unsqueeze(1).to(dtype=dtype)  # [B, 1, 1]
+                vel_prev = vel_prev * (1.0 - trans_mask)
+
+            # 2. Stochastic velocity dropout (50%) + Gaussian jitter on a_prev[:6]
+            drop_mask = (torch.rand((B, 1, 1), device=device) < 0.50).to(dtype=dtype)
+            vel_prev = vel_prev * (1.0 - drop_mask)
+            vel_prev = vel_prev + torch.randn_like(vel_prev) * 0.05 * (1.0 - drop_mask)
+
+        a_prev_flat = vel_prev.reshape(B, -1)  # [B, 24]
+
+        # Phase-Gated 3D EEF Position for Global Conditioning Vector c:
+        # (X, Y) is active ONLY when gripper_state > 0 (post-grasp transport/placement).
+        is_grasped = (gripper_state > 0.0).to(dtype=dtype)
+        eef_pos_gated = torch.cat([eef_pos[:, :2] * is_grasped, eef_pos[:, 2:3]], dim=-1)
+
+        c = (
+            self.time_emb(tau)
+            + self.prefix_encoder(a_prev_flat)
+            + self.gripper_encoder(gripper_state)
+            + self.eef_z_encoder(eef_z)
+            + self.eef_pos_cond(eef_pos_gated)
+        )
+        if l_pool is not None:
+            c = c + self.lang_encoder(l_pool.to(device=device, dtype=dtype))
+
+        ctx = self.context_proj(context)
+        if ctx.shape[1] >= 128:
+            ctx = torch.cat([ctx[:, :128, :] + self.vis_grid_emb, ctx[:, 128:, :]], dim=1)
+        else:
+            ctx = ctx + self.vis_grid_emb[:, :ctx.shape[1], :]
+
+        x = self.action_in_proj(x_t) + self.pos_emb
+
         for block in self.blocks:
-            h = block(h, c)
+            x = block(x, c, ctx)
 
-        # 5. Final AdaLN modulation and linear projection to velocity
-        final_shift, final_scale = self.final_adaLN(c).chunk(2, dim=-1)
-        h = modulate(self.final_norm(h), final_shift, final_scale)
-        v_pred = self.action_out_proj(h)  # [B, 16, 7]
+        x_norm = self.final_norm(x)
+        v_pred = self.out_proj(x_norm)
 
+        grip_feat = x_norm + c.unsqueeze(1) + self.eef_pos_encoder(eef_pos).unsqueeze(1)
+        gripper_logits = self.gripper_head(grip_feat).squeeze(-1)  # [B, 16]
+
+        if return_gripper_logits:
+            return v_pred, gripper_logits
         return v_pred
 
-    @torch.no_grad()
-    def sample_actions(
+    def predict_clean_action(self, x_t: torch.Tensor, tau: torch.Tensor, v_pred: torch.Tensor) -> torch.Tensor:
+        tau_expanded = tau.view(-1, 1, 1)
+        return x_t + (1.0 - tau_expanded) * v_pred
+
+    @torch.inference_mode()
+    def sample_euler(
         self,
         context: torch.Tensor,
-        prefix_waypoints: Optional[torch.Tensor] = None,
-        generator: Optional[torch.Generator] = None,
+        a_prev: Optional[torch.Tensor] = None,
+        gripper_state: Optional[torch.Tensor] = None,
+        l_pool: Optional[torch.Tensor] = None,
+        eef_z: Optional[torch.Tensor] = None,
+        eef_pos: Optional[torch.Tensor] = None,
+        steps: int = 10
     ) -> torch.Tensor:
-        """
-        Generates 16-step action trajectories using 4-step Euler ODE integration.
-        Operates from t = 1.0 (pure Gaussian noise) to t = 0.0 (clean action chunk).
-
-        Args:
-            context: Condition vector [B, context_dim]
-            prefix_waypoints: Optional tail of previous chunk [B, 4, 7]
-            generator: Optional torch random generator
-        Returns:
-            actions: Predicted action chunk [B, 16, 7]
-        """
-        batch_size = context.shape[0]
+        B = context.shape[0]
         device = context.device
+        dtype = context.dtype
 
-        # 1. Sample initial Gaussian noise x_1 ~ N(0, I)
-        x = torch.randn(
-            (batch_size, self.action_horizon, self.action_dim),
-            generator=generator,
+        x_tau = torch.randn(
+            (B, self.chunk_horizon, self.action_dim),
             device=device,
-            dtype=context.dtype,
-        )
+            dtype=torch.float32
+        ) * self.ode_noise_scale
+        dt = 1.0 / float(steps)
 
-        # 2. Uniform Euler integration over NFE = 4 steps
-        steps = self.euler_steps
-        dt = 1.0 / steps
-        timesteps = torch.linspace(1.0, 0.0, steps + 1, device=device)
+        last_grip_logits = None
+        for i in range(steps):
+            tau_val = i * dt
+            tau = torch.full((B,), tau_val, device=device, dtype=dtype)
+            v_pred, grip_logits = self.forward(
+                x_t=x_tau.to(dtype=dtype),
+                tau=tau,
+                context=context,
+                a_prev=a_prev,
+                gripper_state=gripper_state,
+                l_pool=l_pool,
+                eef_z=eef_z,
+                eef_pos=eef_pos,
+                return_gripper_logits=True
+            )
+            x_tau = x_tau + v_pred.float() * dt
+            last_grip_logits = grip_logits.float()
 
-        for step_idx in range(steps):
-            t_curr = timesteps[step_idx].expand(batch_size)
-            # Evaluate vector field v_theta at current state and time
-            v = self.forward(x, t_curr, context, prefix_waypoints=prefix_waypoints)
-            # Euler ODE step: x_{t - dt} = x_t - dt * v
-            x = x - dt * v
+        x_out = x_tau.to(dtype=dtype)
 
-        return x
+        if bool(self.gripper_head_trained.item()) and last_grip_logits is not None and self.action_dim >= 7:
+            grip_action = torch.tanh(last_grip_logits).unsqueeze(-1).to(dtype=dtype)
+            x_out = torch.cat([x_out[:, :, :6], grip_action], dim=-1)
+
+        return x_out

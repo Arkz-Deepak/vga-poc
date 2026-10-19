@@ -1,8 +1,4 @@
-"""
-Controllers Package.
-Contains the Schmitt Trigger Gripper and Asynchronous Inference Queue controllers.
-"""
+from .schmitt_trigger import SchmittTriggerGripper
+from .async_buffer import AsyncActionBuffer
 
-from controllers.schmitt_trigger import SchmittTriggerGripper
-
-__all__ = ["SchmittTriggerGripper"]
+__all__ = ["SchmittTriggerGripper", "AsyncActionBuffer"]

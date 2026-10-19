@@ -52,9 +52,9 @@ runs/
 !results/videos/
 !results/videos/*.mp4
 !results/*.png
-results/kaggle_run/
-results/kaggle_run_v2/
-results/kaggle_run_v3/
+results/kaggle_run*/
+*.pdf
+*.docx
 
 # Jupyter
 .ipynb_checkpoints/
@@ -64,3 +64,4 @@ results/kaggle_run_v3/
 .idea/
 .DS_Store
 *.swp
+

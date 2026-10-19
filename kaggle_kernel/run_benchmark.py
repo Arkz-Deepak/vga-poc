@@ -137,7 +137,7 @@ def main():
         f"--checkpoint {ckpt_path} "
         f"--all_tasks "
         f"--num_episodes 5 "
-        f"--max_steps 380 "
+        f"--max_steps 500 "
         f"--friction_boost 3.5 "
         f"--min_approach_steps 30 "
         f"--schmitt_high 0.70 "

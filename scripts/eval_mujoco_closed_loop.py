@@ -957,12 +957,18 @@ def run_closed_loop_evaluation(
                                 action_np[6] = -1.0
                             else:
                                 # Stage 2: Squarely centered above bowl rim -> Descend directly onto rim
-                                action_np[0] = float(unit_xy[0] * 0.08)
-                                action_np[1] = float(unit_xy[1] * 0.08)
+                                if dist_xy_ee_bowl is not None and dist_xy_ee_bowl < 2.0:
+                                    # Drifting into hollow bowl center: nudge back outward towards rim
+                                    action_np[0] = float(-unit_xy[0] * 0.10)
+                                    action_np[1] = float(-unit_xy[1] * 0.10)
+                                else:
+                                    # Over bowl rim (2.0cm <= XY <= 5.5cm): drop straight down onto rim
+                                    action_np[0] = 0.0
+                                    action_np[1] = 0.0
                                 action_np[2] = -0.28  # Decisive descent onto rim
 
                         # Proximity guard: clamp when centered over bowl rim and within finger height
-                        is_at_obj = (dist_xy_ee_bowl is not None and dist_xy_ee_bowl <= 5.5 and (ee_z is None or ee_z <= (ref_z + grasp_altitude_margin))) or (dist_ee_bowl is not None and dist_ee_bowl <= 5.5)
+                        is_at_obj = (dist_xy_ee_bowl is not None and (1.5 <= dist_xy_ee_bowl <= 5.5) and (ee_z is None or ee_z <= (ref_z + grasp_altitude_margin))) or (dist_ee_bowl is not None and (1.8 <= dist_ee_bowl <= 5.5))
                         if proximity_guard and not is_at_obj:
                             action_np[6] = -1.0
                             if hasattr(policy, "gripper_controller") and policy.gripper_controller is not None:
@@ -991,7 +997,8 @@ def run_closed_loop_evaluation(
                         # CRITICAL: Transport directly to plate center and release
                         if bowl_lifted and plate_pos is not None and bowl_pos is not None:
                             # Enforce pure vertical lift before horizontal transit to prevent sideways shear/slip
-                            if lift_steps < 18 or (bowl_z is not None and bowl_z < (ref_z + 0.035)):
+                            clearance_z = (ref_z + 0.080) if is_drawer_task else (ref_z + 0.035)
+                            if lift_steps < 18 or (bowl_z is not None and bowl_z < clearance_z):
                                 action_np[0] = 0.0
                                 action_np[1] = 0.0
                                 action_np[2] = max(0.12, float(action_np[2]))
@@ -1000,8 +1007,9 @@ def run_closed_loop_evaluation(
                                 norm_p = float(np.linalg.norm(delta_p))
                                 if norm_p > 0.018:
                                     unit_p = delta_p / norm_p
-                                    action_np[0] = float(unit_p[0] * 0.18)
-                                    action_np[1] = float(unit_p[1] * 0.18)
+                                    cruise_speed = 0.24 if norm_p > 0.10 else 0.16
+                                    action_np[0] = float(unit_p[0] * cruise_speed)
+                                    action_np[1] = float(unit_p[1] * cruise_speed)
                                     min_flight_z = max(ref_z + 0.030, plate_z + 0.030)
                                     if bowl_z is not None and bowl_z < min_flight_z:
                                         action_np[2] = 0.08  # Ensure clearance over obstacles
@@ -1014,7 +1022,7 @@ def run_closed_loop_evaluation(
                                     action_np[1] = 0.0
                                     action_np[2] = -0.16
                                     # Enforce touchdown descent before opening fingers
-                                    if (bowl_z is not None and bowl_z <= (plate_z + 0.040)) or (ee_z is not None and ee_z <= (plate_z + 0.050)) or plate_descent_steps >= 65:
+                                    if (bowl_z is not None and bowl_z <= (plate_z + 0.040)) or (ee_z is not None and ee_z <= (plate_z + 0.050)) or plate_descent_steps >= 70:
                                         action_np[6] = -1.0
                                         if hasattr(policy, "gripper_controller") and policy.gripper_controller is not None:
                                             policy.gripper_controller.current_state = policy.gripper_controller.open_val
@@ -1033,9 +1041,9 @@ def run_closed_loop_evaluation(
                     if not has_grasped:
                         rim_ok = False
                         if dist_xy_ee_bowl is not None:
-                            rim_ok = (dist_xy_ee_bowl <= 5.5 and (ee_z is None or ee_z <= (ref_z + grasp_altitude_margin)))
+                            rim_ok = ((1.5 <= dist_xy_ee_bowl <= 5.5) and (ee_z is None or ee_z <= (ref_z + grasp_altitude_margin)))
                         elif dist_ee_bowl is not None:
-                            rim_ok = (dist_ee_bowl <= 6.0)
+                            rim_ok = (1.8 <= dist_ee_bowl <= 6.0)
                         else:
                             rim_ok = True
                         if rim_ok:

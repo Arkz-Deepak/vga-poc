@@ -70,7 +70,16 @@ class VGAConfig:
     # Deprecated Variables (Retained to prevent import breaks in older scripts)
     num_depth_bins: int = 32                         
     lambda_vq: float = 0.0                           
-    vq_codebook_size: int = 256                      
+    vq_codebook_size: int = 256
+    action_horizon: int = 16
+    img_size: int = 256
+    num_visual_tokens: int = 64
+    num_heads_rope: int = 8
+    prefix_len: int = 4
+    max_lambda_kin: float = 0.01
+    kinematic_anneal_steps: int = 2000
+    euler_steps: int = 4
+    benchmark_tasks: List[str] = field(default_factory=lambda: ["all"])                      
 
     # --- Synthetic Drift Injection ---
     max_trans_drift: float = 0.015                   # 15 mm maximum spatial perturbation

@@ -28,6 +28,12 @@ os.environ["PYOPENGL_PLATFORM"] = "egl"
 import builtins
 builtins.input = lambda *args, **kwargs: "n"
 
+try:
+    import peft.import_utils
+    peft.import_utils.is_torchao_available = lambda: False
+except Exception:
+    pass
+
 from libero.libero import benchmark
 from libero.libero.envs import OffScreenRenderEnv
 import numpy as np

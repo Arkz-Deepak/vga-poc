@@ -44,6 +44,7 @@ def main():
     run_cmd(apt_cmd, "Installing Headless EGL System Drivers & Git LFS", check=False)
 
     # 3. Install Python Dependencies
+    run_cmd("pip uninstall -y torchao 2>/dev/null || true", "Removing Incompatible torchao Stub", check=False)
     pip_cmd = (
         'pip install --quiet --break-system-packages "av<14" datasets num2words '
         'git+https://github.com/huggingface/lerobot.git '

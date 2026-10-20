@@ -9,6 +9,12 @@ import gc
 import torch
 import torch.nn as nn
 from transformers import AutoTokenizer, AutoConfig, SiglipVisionModel, AutoModel
+try:
+    import peft.import_utils
+    peft.import_utils.is_torchao_available = lambda: False
+except Exception:
+    pass
+
 from peft import LoraConfig, get_peft_model
 from configs.poc_config import CONFIG
 

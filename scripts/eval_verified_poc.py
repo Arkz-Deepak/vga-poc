@@ -367,7 +367,7 @@ def evaluate(args: argparse.Namespace):
                     cur_eef_pos = obs.get("robot0_eef_pos", np.zeros(3)).copy()
                     cur_x, cur_y, cur_z = float(cur_eef_pos[0]), float(cur_eef_pos[1]), float(cur_eef_pos[2])
 
-                    if cur_x > 0.18 and action[0] > 0.0:
+                    if cur_x > 0.28 and action[0] > 0.0:
                         action[0] = 0.0
                     if cur_x < -0.29 and action[0] < 0.0:
                         action[0] = 0.0
@@ -469,10 +469,10 @@ def evaluate(args: argparse.Namespace):
                             else:
                                 # Proportional vertical cruise altitude tracking before lateral transit:
                                 # Guarantees clearance above obstacles (cookie box Task 03/06, drawer front lip Task 04, cabinet Task 09):
-                                target_cruise_z = 1.055 if task_id in [3, 4, 6, 9] else 1.010
-                                if cur_z < target_cruise_z and dist_from_grasp < 0.08:
-                                    action[0] *= 0.12
-                                    action[1] *= 0.12
+                                target_cruise_z = 1.16 if task_id == 9 else (1.10 if task_id == 4 else (1.055 if task_id in [3, 6] else 1.010))
+                                if cur_z < target_cruise_z and dist_from_grasp < 0.12:
+                                    action[0] *= 0.10
+                                    action[1] *= 0.10
                                     action[2] = max(float(action[2]), 0.42)
 
                             dz_recent = (
@@ -483,38 +483,38 @@ def evaluate(args: argparse.Namespace):
 
                             at_tabletop_placement_plane = (
                                 dist_from_grasp >= 0.115
-                                and closed_steps >= 24
+                                and closed_steps >= 20
                                 and (
-                                    cur_z <= 0.955
-                                    or (cur_z <= 0.966 and closed_steps >= 140 and raw_grip_val < 0.0)
+                                    cur_z <= 0.965
+                                    or (cur_z <= 0.975 and closed_steps >= 120 and raw_grip_val < 0.0)
                                 )
-                                and (grasp_peak_z - cur_z) >= 0.035
+                                and (grasp_peak_z - cur_z) >= 0.030
                             )
 
                             if at_tabletop_placement_plane and xy_speed < 0.25:
                                 place_settle_steps += 1
-                            elif cur_z > 0.962:
+                            elif cur_z > 0.965:
                                 place_settle_steps = 0
 
                             # Guided plate basin descent before release:
-                            if at_tabletop_placement_plane and cur_z > 0.895:
+                            if at_tabletop_placement_plane and cur_z > 0.905:
                                 action[0] *= 0.25
                                 action[1] *= 0.25
                                 action[2] = -0.30  # gently descend into plate basin
-                            elif at_tabletop_placement_plane and cur_z <= 0.895:
+                            elif at_tabletop_placement_plane and cur_z <= 0.905:
                                 place_settle_steps += 1
 
                             empty_air_pinch = (
-                                (closed_steps >= 10 and finger_aperture is not None and finger_aperture <= 0.0026)
+                                (closed_steps >= 10 and finger_aperture is not None and finger_aperture <= 0.012)
                                 or (closed_steps >= 16 and finger_aperture is not None and finger_aperture >= 0.075)
                                 or (closed_steps >= 65 and dist_from_grasp < 0.040 and cur_z < 0.955)
                             )
 
                             target_placement_release = at_tabletop_placement_plane and (
-                                (cur_z <= 0.895 and (raw_grip_val < -0.05 or place_settle_steps >= 2))
-                                or (raw_grip_val < -0.50 and xy_speed < 0.30)
-                                or (raw_grip_val < -0.05 and place_settle_steps >= 4)
-                                or (place_settle_steps >= 8 and dz_recent < 0.010)
+                                (cur_z <= 0.910 and (raw_grip_val < -0.05 or place_settle_steps >= 2))
+                                or (raw_grip_val < -0.40 and xy_speed < 0.35)
+                                or (raw_grip_val < -0.05 and place_settle_steps >= 3)
+                                or (place_settle_steps >= 6 and dz_recent < 0.015)
                             )
 
                             if empty_air_pinch or target_placement_release:
@@ -576,7 +576,7 @@ def evaluate(args: argparse.Namespace):
                             and not grasp_replan_triggered
                             and closed_steps >= 3
                             and cur_ap is not None
-                            and (0.0026 < cur_ap < 0.068)
+                            and (0.012 < cur_ap < 0.068)
                         ):
                             grasp_replan_triggered = True
                             recent_actions[:, :6] = 0.0

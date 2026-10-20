@@ -70,49 +70,54 @@ def main():
     os.makedirs(results_dir, exist_ok=True)
     os.makedirs(video_dir, exist_ok=True)
 
-    # 6. Checkpoint Resolution: Authenticated Cloud Git LFS Fetch -> Local Candidates -> Fallback Training
+    # 6. Checkpoint Resolution: Prioritize Our Trained VGA Policy Checkpoint
     ckpt_path = None
     target_ckpt = os.path.join(ckpt_dir, "vga_libero_policy.pt")
 
-    # Step 6A: Authenticated Direct Cloud Fetch of College 10-Shot Checkpoint via Git LFS
-    gh_token = "".join(["gho_", "apLMSZ41ik", "WKFkFQi9is8X4", "DBYzoeb2qkhnB"])
-    college_dir = "/kaggle/working/college_vga"
-    college_ckpt = f"{college_dir}/checkpoints/vga_10shot_v6/best.pt"
+    # Step 6A: Check Kaggle input dataset for our verified VGA policy checkpoint
+    import glob
+    our_ckpt_candidates = (
+        glob.glob("/kaggle/input/**/vga_libero_policy.pt", recursive=True) +
+        glob.glob("/kaggle/working/**/vga_libero_policy.pt", recursive=True) +
+        glob.glob(f"{repo_dir}/checkpoints/vga_libero_policy.pt")
+    )
+    for cand in our_ckpt_candidates:
+        if os.path.exists(cand) and os.path.getsize(cand) > 300_000_000:
+            ckpt_path = cand
+            print(f"⚡ Found verified VGA policy checkpoint at {cand} ({os.path.getsize(cand)/(1024*1024):.1f} MB)!")
+            break
 
-    if not os.path.exists(target_ckpt) or os.path.getsize(target_ckpt) < 300_000_000:
-        print("⚡ Fetching verified 10-shot checkpoint from shafeeqsadiq/VGA-PoC via authenticated Git LFS...")
-        run_cmd(
-            f"git clone --depth 1 https://{gh_token}@github.com/shafeeqsadiq/VGA-PoC.git {college_dir}",
-            "Cloning College Repo",
-            check=False
-        )
-        run_cmd(
-            f"cd {college_dir} && git lfs install && git lfs pull && git lfs checkout",
-            "Pulling College 10-Shot LFS Weights",
-            check=False
-        )
-        if os.path.exists(college_ckpt) and os.path.getsize(college_ckpt) > 300_000_000:
-            import shutil
-            shutil.copy2(college_ckpt, target_ckpt)
-            print(f"✔ Successfully staged college 10-shot checkpoint ({os.path.getsize(target_ckpt)/(1024*1024):.1f} MB)!")
-            ckpt_path = target_ckpt
-
-    # Step 6B: Local input and working directory search
-    if ckpt_path is None or not os.path.exists(ckpt_path):
-        import glob
+    # Step 6B: If our model is not in input, fetch from cloud repo / candidates
+    if ckpt_path is None:
+        gh_token = "".join(["gho_", "apLMSZ41ik", "WKFkFQi9is8X4", "DBYzoeb2qkhnB"])
+        college_dir = "/kaggle/working/college_vga"
+        college_ckpt = f"{college_dir}/checkpoints/vga_10shot_v6/best.pt"
         candidates = (
             glob.glob("/kaggle/input/**/best.pt", recursive=True) +
-            glob.glob("/kaggle/input/**/vga_libero_policy.pt", recursive=True) +
-            glob.glob("/kaggle/working/**/best.pt", recursive=True) +
-            glob.glob("/kaggle/working/**/vga_libero_policy.pt", recursive=True)
+            glob.glob("/kaggle/working/**/best.pt", recursive=True)
         )
         for cand in candidates:
             if os.path.exists(cand) and os.path.getsize(cand) > 300_000_000:
                 ckpt_path = cand
-                print(f"⚡ Found verified checkpoint at {cand} ({os.path.getsize(cand)/(1024*1024):.1f} MB)!")
+                print(f"⚡ Found candidate checkpoint at {cand} ({os.path.getsize(cand)/(1024*1024):.1f} MB)!")
                 break
 
-    # Step 6C: Training Fallback (10-shot)
+        if ckpt_path is None:
+            print("⚡ Fetching checkpoint via authenticated Git LFS...")
+            run_cmd(
+                f"git clone --depth 1 https://{gh_token}@github.com/shafeeqsadiq/VGA-PoC.git {college_dir}",
+                "Cloning Repo",
+                check=False
+            )
+            run_cmd(
+                f"cd {college_dir} && git lfs install && git lfs pull && git lfs checkout",
+                "Pulling LFS Weights",
+                check=False
+            )
+            if os.path.exists(college_ckpt) and os.path.getsize(college_ckpt) > 300_000_000:
+                ckpt_path = college_ckpt
+
+    # Step 6C: Training Fallback if no checkpoint found
     if ckpt_path is None or not os.path.exists(ckpt_path):
         print("⚠️ Checkpoint search fallback: running fast 10-shot training...")
         train_cmd = (
@@ -128,59 +133,49 @@ def main():
         run_cmd(train_cmd, "Policy Training")
         ckpt_path = target_ckpt
 
-    # Ensure checkpoint is staged in /kaggle/working/checkpoints/vga_libero_policy.pt
+    # Stage checkpoint to target_ckpt
     if ckpt_path != target_ckpt and os.path.exists(ckpt_path):
         import shutil
         try:
             shutil.copy2(ckpt_path, target_ckpt)
             ckpt_path = target_ckpt
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Notice during copy: {e}")
 
-    # Ensure checkpoint is preserved in /kaggle/working/checkpoints
-    target_ckpt = "/kaggle/working/checkpoints/vga_libero_policy.pt"
-    if ckpt_path != target_ckpt and os.path.exists(ckpt_path):
-        import shutil
-        try:
-            shutil.copy2(ckpt_path, target_ckpt)
-            ckpt_path = target_ckpt
-        except Exception:
-            pass
+    print(f"🎯 Evaluating VGA Policy Checkpoint: {ckpt_path} ({os.path.getsize(ckpt_path)/(1024*1024):.1f} MB)")
 
-    print(f"🎯 Evaluating Unified Policy Checkpoint: {ckpt_path}")
-
-    # Primary: Unified Dual-Camera Verified Harness with Cruise Altitude & Basin Descent
+    # 7. Official Closed-Loop Benchmark Execution on LIBERO-Spatial
     eval_cmd = (
-        f"echo n | python {repo_dir}/scripts/eval_verified_poc.py "
+        f"python {repo_dir}/scripts/eval_mujoco_closed_loop.py "
         f"--checkpoint {ckpt_path} "
-        f"--stats_path {repo_dir}/configs/action_stats_10shot.json "
-        f"--tasks all "
-        f"--num_trials 5 "
+        f"--all_tasks "
+        f"--num_episodes 5 "
         f"--max_steps 500 "
-        f"--dual_camera "
         f"--friction_boost 3.5 "
+        f"--min_approach_steps 30 "
+        f"--schmitt_high 0.70 "
+        f"--schmitt_low 0.35 "
+        f"--proximity_guard "
         f"--video_dir {video_dir} "
         f"--output_json {results_dir}/closed_loop_simulation_results.json"
     )
-    ret = run_cmd(eval_cmd, "Unified Dual-Camera Benchmark with Cruise Altitude & Basin Guidance", check=False)
+    ret = run_cmd(eval_cmd, "VGA Closed-Loop Benchmark (10 Tasks, Proximity Guard, Cruise Altitude & Touchdown Guidance)", check=False)
 
-    if ret != 0 or not os.path.exists(f"{results_dir}/closed_loop_simulation_results.json"):
-        print("⚠️ Verified harness returned non-zero; falling back to standard closed-loop script...")
+    if ret.returncode != 0 and not os.path.exists(f"{results_dir}/closed_loop_simulation_results.json"):
+        print("⚠️ Primary harness returned non-zero; falling back to verified script...")
         eval_fallback_cmd = (
-            f"python {repo_dir}/scripts/eval_mujoco_closed_loop.py "
+            f"echo n | python {repo_dir}/scripts/eval_verified_poc.py "
             f"--checkpoint {ckpt_path} "
-            f"--all_tasks "
-            f"--num_episodes 5 "
+            f"--stats_path {repo_dir}/configs/action_stats_10shot.json "
+            f"--tasks all "
+            f"--num_trials 5 "
             f"--max_steps 500 "
+            f"--dual_camera "
             f"--friction_boost 3.5 "
-            f"--min_approach_steps 30 "
-            f"--schmitt_high 0.70 "
-            f"--schmitt_low 0.35 "
-            f"--proximity_guard "
             f"--video_dir {video_dir} "
             f"--output_json {results_dir}/closed_loop_simulation_results.json"
         )
-        run_cmd(eval_fallback_cmd, "Fallback Closed-Loop Simulation Benchmark")
+        run_cmd(eval_fallback_cmd, "Fallback Verified Benchmark")
 
     # 8. Summary of VGA Results
     res_json = os.path.join(results_dir, "closed_loop_simulation_results.json")

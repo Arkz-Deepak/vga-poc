@@ -35,24 +35,24 @@ def main():
 
     run_cmd("nvidia-smi", "NVIDIA GPU Diagnostics", check=False)
 
-    # 2. Install Headless EGL System Libraries (Ubuntu 22.04 & 24.04 compatible)
+    # 2. Install Headless EGL System Libraries & Git LFS
     apt_cmd = (
         "apt-get update -qq && "
-        "apt-get install -y -qq libgl1 libglx-mesa0 libosmesa6-dev || "
-        "apt-get install -y -qq libgl1-mesa-glx libosmesa6-dev || true"
+        "apt-get install -y -qq libgl1 libglx-mesa0 libosmesa6-dev git-lfs || "
+        "apt-get install -y -qq libgl1-mesa-glx libosmesa6-dev git-lfs || true"
     )
-    run_cmd(apt_cmd, "Installing Headless EGL System Drivers", check=False)
+    run_cmd(apt_cmd, "Installing Headless EGL System Drivers & Git LFS", check=False)
 
     # 3. Install Python Dependencies
     pip_cmd = (
         'pip install --quiet --break-system-packages "av<14" datasets num2words '
         'git+https://github.com/huggingface/lerobot.git '
-        'zarr einops scipy torchvision peft accelerate matplotlib imageio imageio-ffmpeg "hf-libero>=0.1.4" mujoco 2>/dev/null || '
+        'zarr einops scipy torchvision peft accelerate matplotlib imageio imageio-ffmpeg "hf-libero>=0.1.4" mujoco h5py 2>/dev/null || '
         'pip install --quiet "av<14" datasets num2words '
         'git+https://github.com/huggingface/lerobot.git '
-        'zarr einops scipy torchvision peft accelerate matplotlib imageio imageio-ffmpeg "hf-libero>=0.1.4" mujoco'
+        'zarr einops scipy torchvision peft accelerate matplotlib imageio imageio-ffmpeg "hf-libero>=0.1.4" mujoco h5py'
     )
-    run_cmd(pip_cmd, "Installing Python Robotics Dependencies (LeRobot, LIBERO, MuJoCo)")
+    run_cmd(pip_cmd, "Installing Python Robotics Dependencies (LeRobot, LIBERO, MuJoCo, H5Py)")
 
     # 4. Clone / Sync latest repository from GitHub
     repo_dir = "/kaggle/working/vga-poc"
@@ -69,56 +69,47 @@ def main():
     os.makedirs(results_dir, exist_ok=True)
     os.makedirs(video_dir, exist_ok=True)
 
-    # 6. Ultra-Fast Checkpoint Resolution: Reusing pre-trained 1,000-step checkpoint from Version 6
-    os.environ["KAGGLE_USERNAME"] = "deepak121"
-    os.environ["KAGGLE_KEY"] = "KGAT_dec696c566e3b637069807b1bd443edc"
+    # 6. Checkpoint Resolution: Kaggle Mounted Dataset -> Local Candidates -> Fallback Training
+    ckpt_path = None
+    target_ckpt = os.path.join(ckpt_dir, "vga_libero_policy.pt")
 
     import glob
     candidates = (
-        glob.glob("/kaggle/input/**/vga_libero_policy.pt", recursive=True) +
-        glob.glob("/kaggle/working/**/vga_libero_policy.pt", recursive=True) +
         glob.glob("/kaggle/input/**/best.pt", recursive=True) +
-        glob.glob("/kaggle/working/**/best.pt", recursive=True)
+        glob.glob("/kaggle/input/**/vga_libero_policy.pt", recursive=True) +
+        glob.glob("/kaggle/working/**/best.pt", recursive=True) +
+        glob.glob("/kaggle/working/**/vga_libero_policy.pt", recursive=True)
     )
-    ckpt_path = None
     for cand in candidates:
         if os.path.exists(cand) and os.path.getsize(cand) > 300_000_000:
             ckpt_path = cand
-            print(f"⚡ Found pre-trained checkpoint at {cand} ({os.path.getsize(cand)/(1024*1024):.1f} MB)!")
+            print(f"⚡ Found verified checkpoint at {cand} ({os.path.getsize(cand)/(1024*1024):.1f} MB)!")
             break
 
-    if ckpt_path is None:
-        print("⚡ Fetching verified checkpoint from Version 17 via Kaggle Cloud...")
-        dl_cmd = (
-            "kaggle kernels output deepark121/vga-poc-benchmark/17 -p /kaggle/working/checkpoints || "
-            "kaggle kernels output deepark121/vga-poc-benchmark -p /kaggle/working/checkpoints || "
-            "~/.local/bin/kaggle kernels output deepark121/vga-poc-benchmark/17 -p /kaggle/working/checkpoints"
-        )
-        run_cmd(dl_cmd, "Downloading Version 17 Checkpoint", check=False)
-
-        candidates = (
-            glob.glob("/kaggle/working/**/vga_libero_policy.pt", recursive=True) +
-            glob.glob("/kaggle/working/**/best.pt", recursive=True)
-        )
-        for cand in candidates:
-            if os.path.exists(cand) and os.path.getsize(cand) > 300_000_000:
-                ckpt_path = cand
-                break
-
-    if ckpt_path is None:
-        print("⚠️ Checkpoint download fallback: running fast 300-step training...")
+    # Step 6B: If not found, check if local/downloaded checkpoints exist
+    if ckpt_path is None or not os.path.exists(ckpt_path):
+        print("⚠️ Checkpoint search fallback: running fast 10-shot training...")
         train_cmd = (
             f"CUDA_VISIBLE_DEVICES=0 python {repo_dir}/scripts/train_vga.py "
             f"--task_id 0 "
-            f"--shots 20 "
-            f"--steps 300 "
-            f"--batch_size 32 "
-            f"--lr 0.0003 "
+            f"--shots 10 "
+            f"--steps 400 "
+            f"--batch_size 16 "
+            f"--lr 0.0001 "
             f"--in_memory "
             f"--output_dir {ckpt_dir}"
         )
         run_cmd(train_cmd, "Policy Training")
-        ckpt_path = os.path.join(ckpt_dir, "vga_libero_policy.pt")
+        ckpt_path = target_ckpt
+
+    # Ensure checkpoint is staged in /kaggle/working/checkpoints/vga_libero_policy.pt
+    if ckpt_path != target_ckpt and os.path.exists(ckpt_path):
+        import shutil
+        try:
+            shutil.copy2(ckpt_path, target_ckpt)
+            ckpt_path = target_ckpt
+        except Exception:
+            pass
 
     # Ensure checkpoint is preserved in /kaggle/working/checkpoints
     target_ckpt = "/kaggle/working/checkpoints/vga_libero_policy.pt"

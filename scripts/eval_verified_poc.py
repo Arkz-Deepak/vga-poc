@@ -25,6 +25,9 @@ from typing import Any, Dict, List, Optional
 os.environ["MUJOCO_GL"] = "egl"
 os.environ["PYOPENGL_PLATFORM"] = "egl"
 
+import builtins
+builtins.input = lambda *args, **kwargs: "n"
+
 from libero.libero import benchmark
 from libero.libero.envs import OffScreenRenderEnv
 import numpy as np

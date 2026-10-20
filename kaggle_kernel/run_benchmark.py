@@ -150,7 +150,7 @@ def main():
 
     # Primary: Unified Dual-Camera Verified Harness with Cruise Altitude & Basin Descent
     eval_cmd = (
-        f"python {repo_dir}/scripts/eval_verified_poc.py "
+        f"echo n | python {repo_dir}/scripts/eval_verified_poc.py "
         f"--checkpoint {ckpt_path} "
         f"--stats_path {repo_dir}/configs/action_stats_10shot.json "
         f"--tasks all "

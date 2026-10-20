@@ -73,39 +73,39 @@ def main():
     os.environ["KAGGLE_USERNAME"] = "deepak121"
     os.environ["KAGGLE_KEY"] = "KGAT_dec696c566e3b637069807b1bd443edc"
 
-    v6_candidates = [
-        "/kaggle/working/checkpoints/vga_libero_policy.pt",
-        "/kaggle/input/vga-poc-benchmark/checkpoints/vga_libero_policy.pt",
-        "/kaggle/input/vga-poc-benchmark/vga_libero_policy.pt",
-    ]
+    import glob
+    candidates = (
+        glob.glob("/kaggle/input/**/vga_libero_policy.pt", recursive=True) +
+        glob.glob("/kaggle/working/**/vga_libero_policy.pt", recursive=True) +
+        glob.glob("/kaggle/input/**/best.pt", recursive=True) +
+        glob.glob("/kaggle/working/**/best.pt", recursive=True)
+    )
     ckpt_path = None
-    for cand in v6_candidates:
-        if os.path.exists(cand) and os.path.getsize(cand) > 500_000_000:
+    for cand in candidates:
+        if os.path.exists(cand) and os.path.getsize(cand) > 300_000_000:
             ckpt_path = cand
-            print(f"⚡ Found pre-trained 1,000-step checkpoint at {cand} ({os.path.getsize(cand)/(1024*1024):.1f} MB)!")
+            print(f"⚡ Found pre-trained checkpoint at {cand} ({os.path.getsize(cand)/(1024*1024):.1f} MB)!")
             break
 
     if ckpt_path is None:
-        print("⚡ Fetching verified 1,000-step checkpoint from Version 6 via Kaggle Cloud...")
+        print("⚡ Fetching verified checkpoint from Version 17 via Kaggle Cloud...")
         dl_cmd = (
-            "~/.local/bin/kaggle kernels output deepark121/vga-poc-benchmark/6 "
-            "-p /kaggle/working/checkpoints --file-pattern '.*vga_libero_policy.*\\.pt' || "
-            "kaggle kernels output deepark121/vga-poc-benchmark/6 "
-            "-p /kaggle/working/checkpoints --file-pattern '.*vga_libero_policy.*\\.pt'"
+            "kaggle kernels output deepark121/vga-poc-benchmark/17 -p /kaggle/working/checkpoints || "
+            "kaggle kernels output deepark121/vga-poc-benchmark -p /kaggle/working/checkpoints || "
+            "~/.local/bin/kaggle kernels output deepark121/vga-poc-benchmark/17 -p /kaggle/working/checkpoints"
         )
-        run_cmd(dl_cmd, "Downloading Version 6 1,000-step Checkpoint", check=False)
+        run_cmd(dl_cmd, "Downloading Version 17 Checkpoint", check=False)
 
-        # Check in checkpoints/ and nested checkpoints/
-        for cand in [
-            "/kaggle/working/checkpoints/vga_libero_policy.pt",
-            "/kaggle/working/checkpoints/checkpoints/vga_libero_policy.pt",
-        ]:
-            if os.path.exists(cand) and os.path.getsize(cand) > 500_000_000:
+        candidates = (
+            glob.glob("/kaggle/working/**/vga_libero_policy.pt", recursive=True) +
+            glob.glob("/kaggle/working/**/best.pt", recursive=True)
+        )
+        for cand in candidates:
+            if os.path.exists(cand) and os.path.getsize(cand) > 300_000_000:
                 ckpt_path = cand
                 break
 
     if ckpt_path is None:
-        # Fallback to local 300-step if download failed
         print("⚠️ Checkpoint download fallback: running fast 300-step training...")
         train_cmd = (
             f"CUDA_VISIBLE_DEVICES=0 python {repo_dir}/scripts/train_vga.py "

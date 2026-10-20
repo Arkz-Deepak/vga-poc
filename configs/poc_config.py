@@ -103,3 +103,5 @@ class VGAConfig:
     })
 
 CONFIG = VGAConfig()
+ModelConfig = VGAConfig
+cfg = CONFIG

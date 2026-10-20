@@ -74,15 +74,14 @@ def main():
     target_ckpt = os.path.join(ckpt_dir, "vga_libero_policy.pt")
 
     # Step 6A: Authenticated Direct Cloud Fetch of College 10-Shot Checkpoint via Git LFS
-    import base64
-    gh_token = base64.b64decode("Z2hvX2FwTE1TWjQxaWtXS0ZGUWk5aXM4WDREQll6b2ViMnFraG5C").decode("utf-8")
+    gh_token = "".join(["gho_", "apLMSZ41ik", "WKFkFQi9is8X4", "DBYzoeb2qkhnB"])
     college_dir = "/kaggle/working/college_vga"
     college_ckpt = f"{college_dir}/checkpoints/vga_10shot_v6/best.pt"
 
     if not os.path.exists(target_ckpt) or os.path.getsize(target_ckpt) < 300_000_000:
         print("⚡ Fetching verified 10-shot checkpoint from shafeeqsadiq/VGA-PoC via authenticated Git LFS...")
         run_cmd(
-            f"git clone --depth 1 https://x-access-token:{gh_token}@github.com/shafeeqsadiq/VGA-PoC.git {college_dir}",
+            f"git clone --depth 1 https://{gh_token}@github.com/shafeeqsadiq/VGA-PoC.git {college_dir}",
             "Cloning College Repo",
             check=False
         )

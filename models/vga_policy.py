@@ -37,7 +37,10 @@ class VGAPolicy(nn.Module):
         load_pretrained: bool = False,
         siglip_name: str = "google/siglip-base-patch16-384",
         smollm_name: str = "HuggingFaceTB/SmolLM2-360M",
-        bootstrap_oxe: bool = True
+        bootstrap_oxe: bool = True,
+        cfg: Optional[Any] = None,
+        normalizer: Optional[Any] = None,
+        **kwargs
     ):
         super().__init__()
         self.config = CONFIG

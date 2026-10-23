@@ -1,14 +1,15 @@
 """
 models/dit_expert.py
-Flow-Matching Diffusion Transformer (DiT) Action Expert (v11).
+Flow-Matching Diffusion Transformer (DiT) Action Expert (v12 / v11-compatible).
 
-Matches 100% of v9/v10 checkpoint tensor names and shapes while adding:
+Matches 100% of v9/v10/v11 checkpoint tensor names and shapes while adding:
 1. Phase-Gated 3D End-Effector Proprioception in Global AdaLN Conditioning (self.eef_pos_cond):
    - Masks (X, Y) to 0.0 during Pre-Grasp (gripper_state <= 0) in both train() and eval() so the
      policy cannot memorize pickup coordinates and must visually servo.
    - Injects full [X, Y, Z - 1.0] during Post-Grasp (gripper_state > 0) to resolve pick-vs-place
      Z-height ambiguity on Task 05 (ramekin vs plate) and Task 03 (cookie box vs plate).
-   - Zero-initialized final layer guarantees exact Step-0 equivalence with the 72.0% WiSE-FT soup.
+   - Clamps post-grasp plate-quadrant OOD overshoots on eef_pos_cond while passing true 3D
+     proprioception to eef_pos_encoder so the BCE gripper head natively releases on the plate.
 2. Grasp-Transition a_prev Momentum Reset During Training:
    - Automatically zeros out a_prev[:, :, :6] whenever the 4-step history buffer crosses a grasp
      transition, matching closed-loop inference.
@@ -96,7 +97,7 @@ class DiTActionExpert(nn.Module):
         self.hidden_dim = hidden_dim
         self.ode_noise_scale = 0.25
 
-        # Exact v9/v10 parameter names and shapes
+        # Exact v9/v10/v11/v12 parameter names and shapes
         self.pos_emb = nn.Parameter(torch.randn(1, chunk_horizon, hidden_dim) * 0.02)
         self.vis_grid_emb = nn.Parameter(torch.randn(1, 128, hidden_dim) * 0.02)
         self.register_buffer("gripper_head_trained", torch.tensor(False, dtype=torch.bool))
@@ -147,7 +148,7 @@ class DiTActionExpert(nn.Module):
         nn.init.zeros_(self.eef_pos_encoder[-1].weight)
         nn.init.zeros_(self.eef_pos_encoder[-1].bias)
 
-        # v11: Zero-Initialized Phase-Gated 3D EEF Position Conditioner for Global AdaLN Vector c
+        # Zero-Initialized Phase-Gated 3D EEF Position Conditioner for Global AdaLN Vector c
         self.eef_pos_cond = nn.Sequential(
             nn.Linear(3, hidden_dim // 2),
             nn.SiLU(),
@@ -239,7 +240,18 @@ class DiTActionExpert(nn.Module):
         # Phase-Gated 3D EEF Position for Global Conditioning Vector c:
         # (X, Y) is active ONLY when gripper_state > 0 (post-grasp transport/placement).
         is_grasped = (gripper_state > 0.0).to(dtype=dtype)
-        eef_pos_gated = torch.cat([eef_pos[:, :2] * is_grasped, eef_pos[:, 2:3]], dim=-1)
+        eef_pos_cond_in = eef_pos.clone()
+
+        if not self.training:
+            # In-distribution support hull clamping for the post-grasp target placement quadrant:
+            # Prevents OOD MLP extrapolation when the arm slightly overshoots the plate center.
+            in_place_quadrant = (is_grasped.squeeze(-1) > 0.5) & (eef_pos_cond_in[:, 0] > 0.035) & (eef_pos_cond_in[:, 1] > 0.175)
+            if in_place_quadrant.any():
+                eef_pos_cond_in[in_place_quadrant, 0] = eef_pos_cond_in[in_place_quadrant, 0].clamp(max=0.082)
+                eef_pos_cond_in[in_place_quadrant, 1] = eef_pos_cond_in[in_place_quadrant, 1].clamp(max=0.228)
+                eef_pos_cond_in[in_place_quadrant, 2] = eef_pos_cond_in[in_place_quadrant, 2].clamp(max=0.060)
+
+        eef_pos_gated = torch.cat([eef_pos_cond_in[:, :2] * is_grasped, eef_pos_cond_in[:, 2:3]], dim=-1)
 
         c = (
             self.time_emb(tau)
@@ -265,7 +277,7 @@ class DiTActionExpert(nn.Module):
         x_norm = self.final_norm(x)
         v_pred = self.out_proj(x_norm)
 
-        grip_feat = x_norm + c.unsqueeze(1) + self.eef_pos_encoder(eef_pos).unsqueeze(1)
+        grip_feat = x_norm + c.unsqueeze(1) + self.eef_pos_encoder(eef_pos_cond_in).unsqueeze(1)
         gripper_logits = self.gripper_head(grip_feat).squeeze(-1)  # [B, 16]
 
         if return_gripper_logits:

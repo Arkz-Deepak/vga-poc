@@ -1,18 +1,17 @@
 """
 data/dataset.py
-Trajectory Chunk Ingestion and Normalization Dataset for LIBERO-Spatial.
+Trajectory Chunk Ingestion and Normalization Dataset for LIBERO-Spatial (v12).
 
 Key Capabilities:
-1. Robust Multi-Key Discovery: Automatically searches for observation keys across LIBERO
-   variants ('agentview_rgb', 'robot0_eye_in_hand_rgb', 'robot0_eef_pos', 'robot0_eef_quat',
-   'robot0_gripper_qpos', etc.).
-2. Relative SE(3) Wrist Pose Construction: Computes relative wrist rotation R_rel(t) = R_eef(t) @ R_eef(0)^T
-   so that nominal downward home orientation equals Identity I_3 (avoiding 180-deg optical frame flips)
-   while accurately rotating 3D Ray-RoPE rays whenever the wrist pitches or rolls at workspace edges.
-3. Physical Proprioceptive Grasp State: Uses physical finger encoder separation ('robot0_gripper_qpos')
-   alongside commands so a_prev[:, 6] reflects true physical object capture in [-1.0, +1.0].
-4. Dual-Camera & Decoupled Action Targets: Provides both normalized 6-DoF flow targets and raw binary
-   gripper targets for decoupled Flow-Matching + BCE supervision.
+1. Robust Multi-Key Discovery across LIBERO variants.
+2. Relative SE(3) Wrist Pose Construction: R_rel(t) = R_eef(t) @ R_eef(0)^T.
+3. Unified Physical Proprioceptive Grasp State (0.0010m < aperture < 0.068m):
+   - Matches eval_verified_poc.py's exact 0.0010m threshold so thin-rim grasps (0.0012m-0.0025m)
+     receive consistent a_prev[:, 6] = +1.0 conditioning in both training and inference.
+4. Deep-Seat Grasp Alignment & 6-Step Terminal Plate-Release Tail:
+   - Aligns premature teleop grasp button presses with physical descent seating.
+   - Appends a 6-step settle-and-release tail at the final plate pose (without altering mu/sigma)
+     so the DiT and BCE gripper head learn to natively open and retract on the plate.
 """
 import glob
 import json
@@ -78,8 +77,6 @@ def compute_relative_wrist_rotmat(
 ) -> np.ndarray:
     """
     Computes the relative wrist rotation matrix R_rel(t) = R_eef(t) @ R_eef(0)^T.
-    At nominal downward home pose (t=0), R_rel(0) = I_3, preserving the Ray-RoPE optical axis
-    convention while capturing exact 3D wrist pitch/roll deviations across the workspace.
     """
     if quat_t is not None and quat_0 is not None:
         r_t = quat_xyzw_to_rotmat(quat_t)
@@ -92,6 +89,15 @@ def compute_relative_wrist_rotmat(
     return np.eye(3, dtype=np.float32)
 
 
+def _extract_aperture_array(gripper_qpos: np.ndarray) -> Optional[np.ndarray]:
+    q = np.asarray(gripper_qpos, dtype=np.float32)
+    if q.ndim == 2 and q.shape[-1] >= 2:
+        return np.abs(q[:, 0] - q[:, 1])
+    elif q.ndim == 2 and q.shape[-1] == 1:
+        return np.abs(q[:, 0]) * 2.0
+    return None
+
+
 def compute_physical_gripper_state(
     cmd_grip: np.ndarray,
     gripper_qpos: Optional[np.ndarray] = None
@@ -99,91 +105,112 @@ def compute_physical_gripper_state(
     """
     Maps physical finger aperture width w = |qpos[0] - qpos[1]| and command history into
     an in-distribution [-1.0 (open / empty air), +1.0 (holding object)] state signal.
+    Uses 0.0010m lower bound to match eval_verified_poc.py on thin-rim grasps.
     """
     cmd_sign = np.where(cmd_grip > 0.0, 1.0, -1.0).astype(np.float32)
     if gripper_qpos is None:
         return cmd_sign
 
-    q = np.asarray(gripper_qpos, dtype=np.float32)
-    if q.ndim == 2 and q.shape[-1] >= 2:
-        aperture = np.abs(q[:, 0] - q[:, 1])
-    elif q.ndim == 2 and q.shape[-1] == 1:
-        aperture = np.abs(q[:, 0]) * 2.0
-    else:
+    aperture = _extract_aperture_array(gripper_qpos)
+    if aperture is None:
         return cmd_sign
 
-    # Physical grasp requires commanded closure AND non-zero finger separation (0.0025m < w < 0.068m)
-    # If fingers pinch completely shut on empty air (w <= 0.0025m) or are wide open (w >= 0.068m), state is -1.0
-    holding_obj = (cmd_grip > 0.0) & (aperture > 0.0025) & (aperture < 0.068)
+    holding_obj = (cmd_grip > 0.0) & (aperture > 0.0010) & (aperture < 0.068)
     return np.where(holding_obj, 1.0, -1.0).astype(np.float32)
 
 
-from pathlib import Path
+def refine_grasp_and_append_release_tail(
+    front_rgb: np.ndarray,
+    wrist_rgb: Optional[np.ndarray],
+    depth: Optional[np.ndarray],
+    eef_pos: Optional[np.ndarray],
+    eef_quat: Optional[np.ndarray],
+    eef_ori: Optional[np.ndarray],
+    gripper_qpos: Optional[np.ndarray],
+    actions: np.ndarray,
+    tail_steps: int = 6
+) -> Tuple[np.ndarray, Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], np.ndarray]:
+    """
+    1. Deep-Seat Grasp Alignment: If the human teleoperator pressed close (actions[t, 6] > 0)
+       1 step before the descending gripper physically contacted the bowl (aperture > 0.072m
+       and action_dz < -0.10), delays the +1.0 label by 1 step so the policy seats deeper onto
+       the bowl rim before closing.
+    2. Terminal Plate-Release Tail: Appends `tail_steps` frames at the terminal placement pose
+       where the gripper opens (-1.0) and gently retracts (+Z), teaching native plate release.
+    """
+    acts = actions.astype(np.float32).copy()
+    T_orig = len(acts)
+    if T_orig < 8 or acts.shape[-1] < 7:
+        return front_rgb, wrist_rgb, depth, eef_pos, eef_quat, eef_ori, gripper_qpos, acts
+
+    # 1. Deep-Seat Grasp Alignment (1-step delay on premature wide-open descending close command)
+    if gripper_qpos is not None:
+        ap = _extract_aperture_array(gripper_qpos)
+        if ap is not None and len(ap) == T_orig:
+            pos_indices = np.where(acts[:, 6] > 0.0)[0]
+            if len(pos_indices) > 4:
+                t0 = int(pos_indices[0])
+                if 1 <= t0 < T_orig - 4 and ap[t0] > 0.072 and acts[t0, 2] < -0.10:
+                    acts[t0, 6] = -1.0
+
+    if tail_steps <= 0:
+        return front_rgb, wrist_rgb, depth, eef_pos, eef_quat, eef_ori, gripper_qpos, acts
+
+    # 2. Construct 6-Step Terminal Settle & Release Tail
+    tail_acts = np.zeros((tail_steps, acts.shape[-1]), dtype=np.float32)
+    # First 2 tail steps: zero XY velocity, gentle downward settle, open gripper (-1.0)
+    tail_acts[:2, 2] = -0.05
+    tail_acts[:2, 6] = -1.0
+    # Remaining 4 tail steps: clean vertical retract (+0.25) with open gripper (-1.0)
+    tail_acts[2:, 2] = 0.25
+    tail_acts[2:, 6] = -1.0
+
+    acts_ext = np.concatenate([acts, tail_acts], axis=0)
+    front_ext = np.concatenate([front_rgb, np.repeat(front_rgb[-1:], tail_steps, axis=0)], axis=0)
+    wrist_ext = (
+        np.concatenate([wrist_rgb, np.repeat(wrist_rgb[-1:], tail_steps, axis=0)], axis=0)
+        if wrist_rgb is not None
+        else None
+    )
+    depth_ext = (
+        np.concatenate([depth, np.repeat(depth[-1:], tail_steps, axis=0)], axis=0)
+        if depth is not None
+        else None
+    )
+
+    if eef_pos is not None:
+        pos_tail = np.repeat(eef_pos[-1:].astype(np.float32), tail_steps, axis=0)
+        for k in range(2, tail_steps):
+            pos_tail[k, 2] = pos_tail[k - 1, 2] + 0.012
+        eef_pos_ext = np.concatenate([eef_pos.astype(np.float32), pos_tail], axis=0)
+    else:
+        eef_pos_ext = None
+
+    eef_quat_ext = (
+        np.concatenate([eef_quat, np.repeat(eef_quat[-1:], tail_steps, axis=0)], axis=0)
+        if eef_quat is not None
+        else None
+    )
+    eef_ori_ext = (
+        np.concatenate([eef_ori, np.repeat(eef_ori[-1:], tail_steps, axis=0)], axis=0)
+        if eef_ori is not None
+        else None
+    )
+
+    if gripper_qpos is not None:
+        q_tail = np.repeat(gripper_qpos[-1:].astype(np.float32), tail_steps, axis=0)
+        if q_tail.shape[-1] >= 2:
+            # Jaws open smoothly during the release tail
+            q_tail[1:, 0] = 0.038
+            q_tail[1:, 1] = -0.038
+        gripper_qpos_ext = np.concatenate([gripper_qpos.astype(np.float32), q_tail], axis=0)
+    else:
+        gripper_qpos_ext = None
+
+    return front_ext, wrist_ext, depth_ext, eef_pos_ext, eef_quat_ext, eef_ori_ext, gripper_qpos_ext, acts_ext
 
 
-class Normalizer:
-    """Handles bidirectional normalization of 7D action vectors using empirical statistics."""
-
-    def __init__(self, stats_path: Optional[Union[str, Path]] = None):
-        target_path: Optional[Path] = None
-        repo_root = Path(__file__).resolve().parent.parent
-
-        candidate_paths = []
-        if stats_path is not None:
-            candidate_paths.append(Path(stats_path))
-            candidate_paths.append(repo_root / stats_path)
-            candidate_paths.append(repo_root / "configs" / Path(stats_path).name)
-
-        candidate_paths.extend([
-            repo_root / "configs" / "action_stats.json",
-            repo_root / "configs" / "action_stats_10shot.json",
-            Path("configs/action_stats.json"),
-            Path("configs/action_stats_10shot.json"),
-            Path("/kaggle/working/vga-poc/configs/action_stats.json"),
-            Path("/kaggle/working/vga-poc/configs/action_stats_10shot.json"),
-            Path("/kaggle/working/configs/action_stats.json"),
-        ])
-
-        for p in candidate_paths:
-            try:
-                if p.is_file():
-                    target_path = p
-                    break
-            except Exception:
-                pass
-
-        if target_path is not None and target_path.exists():
-            with open(target_path, "r") as f:
-                stats = json.load(f)
-            mean_key = "mu" if "mu" in stats else ("mu_d" if "mu_d" in stats else "mean")
-            std_key = "sigma" if "sigma" in stats else ("sigma_d" if "sigma_d" in stats else "std")
-            self.mu_d = torch.tensor(stats[mean_key], dtype=torch.float32)
-            self.sigma_d = torch.tensor(stats[std_key], dtype=torch.float32)
-            self.sigma_d = torch.clamp(self.sigma_d, min=1e-5)
-            self.sigma_pos_sq = stats.get("sigma_pos_sq", 0.18988)
-            self.sigma_rot_sq = stats.get("sigma_rot_sq", 0.00321)
-            self.stats_path = str(target_path)
-        else:
-            self.mu_d = torch.tensor([0.172505, 0.101684, -0.144693, 0.009553, 0.000129, -0.032239, -0.012093], dtype=torch.float32)
-            self.sigma_d = torch.tensor([0.507023, 0.206400, 0.616726, 0.043281, 0.075032, 0.068463, 0.999927], dtype=torch.float32)
-            self.sigma_d = torch.clamp(self.sigma_d, min=1e-5)
-            self.sigma_pos_sq = 0.22667457
-            self.sigma_rot_sq = 0.00406339
-            self.stats_path = "default_empirical"
-
-    def normalize(self, actions: torch.Tensor) -> torch.Tensor:
-        mu = self.mu_d.to(device=actions.device, dtype=actions.dtype)
-        sigma = self.sigma_d.to(device=actions.device, dtype=actions.dtype)
-        return (actions - mu) / sigma
-
-    def unnormalize(self, norm_actions: torch.Tensor) -> torch.Tensor:
-        mu = self.mu_d.to(device=norm_actions.device, dtype=norm_actions.dtype)
-        sigma = self.sigma_d.to(device=norm_actions.device, dtype=norm_actions.dtype)
-        return norm_actions * sigma + mu
-
-
-
-class LiberoSpatialHDF5Dataset(Dataset):
+class LiberoSpatialDataset(Dataset):
     def __init__(
         self,
         episodes: List[Dict[str, Any]],
@@ -324,8 +351,8 @@ class LiberoSpatialHDF5Dataset(Dataset):
 
     @staticmethod
     def compute_action_stats(episodes: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Calculates global mean and standard deviation normalizers across demonstrations."""
-        all_actions = np.concatenate([ep["actions"] for ep in episodes], axis=0)
+        """Calculates global mean and standard deviation normalizers across original demonstrations."""
+        all_actions = np.concatenate([ep.get("actions_orig", ep["actions"]) for ep in episodes], axis=0)
         mu = np.mean(all_actions, axis=0).astype(np.float32)
         sigma = np.std(all_actions, axis=0).astype(np.float32)
         sigma = np.clip(sigma, 1e-4, None)
@@ -377,6 +404,7 @@ class LiberoSpatialHDF5Dataset(Dataset):
 
             if file_path.endswith(".npz"):
                 with np.load(file_path, allow_pickle=True) as f:
+                    acts_orig = f["actions"].astype(np.float32)
                     episodes.append({
                         "front_rgb": f["rgb"],
                         "wrist_rgb": None,
@@ -385,7 +413,8 @@ class LiberoSpatialHDF5Dataset(Dataset):
                         "eef_quat": None,
                         "eef_ori": None,
                         "gripper_qpos": None,
-                        "actions": f["actions"].astype(np.float32),
+                        "actions": acts_orig,
+                        "actions_orig": acts_orig,
                         "prompt": str(f.get("prompt", default_prompt)),
                         "front_intrinsics": None,
                         "wrist_intrinsics": None,
@@ -408,7 +437,7 @@ class LiberoSpatialHDF5Dataset(Dataset):
                     if "actions" not in demo:
                         continue
 
-                    actions = demo["actions"][:]
+                    actions_orig = demo["actions"][:].astype(np.float32)
                     obs = demo.get("obs", demo)
 
                     # 1. Extract Front RGB
@@ -449,10 +478,10 @@ class LiberoSpatialHDF5Dataset(Dataset):
                         eef_pos = obs["ee_states"][:, :3]
 
                     if eef_pos is None:
-                        T_len = len(actions)
+                        T_len = len(actions_orig)
                         eef_pos = np.zeros((T_len, 3), dtype=np.float32)
                         nominal_pos = np.array([0.0, 0.0, 0.85], dtype=np.float32)
-                        eef_pos[:] = nominal_pos + np.cumsum(actions[:, :3] * 0.05, axis=0)
+                        eef_pos[:] = nominal_pos + np.cumsum(actions_orig[:, :3] * 0.05, axis=0)
 
                     eef_quat = None
                     for qk in ["robot0_eef_quat", "eef_quat", "ee_quat"]:
@@ -509,15 +538,38 @@ class LiberoSpatialHDF5Dataset(Dataset):
                         except Exception:
                             pass
 
+                    # 7. Deep-Seat Grasp Alignment & 6-Step Terminal Release Tail
+                    (
+                        front_rgb_ext,
+                        wrist_rgb_ext,
+                        depth_ext,
+                        eef_pos_ext,
+                        eef_quat_ext,
+                        eef_ori_ext,
+                        gripper_qpos_ext,
+                        actions_ext
+                    ) = refine_grasp_and_append_release_tail(
+                        front_rgb=front_rgb,
+                        wrist_rgb=wrist_rgb,
+                        depth=depth,
+                        eef_pos=eef_pos,
+                        eef_quat=eef_quat,
+                        eef_ori=eef_ori,
+                        gripper_qpos=gripper_qpos,
+                        actions=actions_orig,
+                        tail_steps=6
+                    )
+
                     episodes.append({
-                        "front_rgb": front_rgb,
-                        "wrist_rgb": wrist_rgb,
-                        "depth": depth,
-                        "eef_pos": eef_pos,
-                        "eef_quat": eef_quat,
-                        "eef_ori": eef_ori,
-                        "gripper_qpos": gripper_qpos,
-                        "actions": actions.astype(np.float32),
+                        "front_rgb": front_rgb_ext,
+                        "wrist_rgb": wrist_rgb_ext,
+                        "depth": depth_ext,
+                        "eef_pos": eef_pos_ext,
+                        "eef_quat": eef_quat_ext,
+                        "eef_ori": eef_ori_ext,
+                        "gripper_qpos": gripper_qpos_ext,
+                        "actions": actions_ext,
+                        "actions_orig": actions_orig,
                         "prompt": prompt,
                         "front_intrinsics": front_intrinsics,
                         "wrist_intrinsics": wrist_intrinsics,
@@ -540,361 +592,3 @@ class LiberoSpatialHDF5Dataset(Dataset):
             prefix_len=prefix_len,
             action_stats=action_stats
         )
-
-
-class LiberoSpatialLeRobotDataset(Dataset):
-    """
-    Dataset wrapper for LIBERO-Spatial episodes providing 16-step action chunking,
-    image observation preprocessing, and task filtering.
-    """
-
-    def __init__(
-        self,
-        lerobot_dataset,
-        normalizer: Normalizer,
-        action_horizon: int = 16,
-        target_tasks: Optional[List[str]] = None,
-        shots_per_task: Optional[int] = None,
-        skip_per_task: int = 0,
-        img_size: int = 256,
-        prefix_len: int = 4,
-        cache_in_memory: bool = True,
-    ):
-        """
-        Args:
-            lerobot_dataset: Loaded LeRobotDataset instance
-            normalizer: Normalizer loaded with action_stats.json
-            action_horizon: Number of future action steps to chunk (default: 16)
-            target_tasks: List of task names/substrings to include (default: 3 PoC tasks)
-            shots_per_task: If specified, limit the dataset to N episodes per task (e.g. 5 or 10)
-            skip_per_task: Number of initial episodes per task to skip (useful for held-out test splits)
-            img_size: Image spatial resolution for SigLIP vision backbone (default: 256)
-            prefix_len: Number of historical waypoints P for smooth chunk joins (default: 4)
-            cache_in_memory: If True, preloads all few-shot demonstration frames into RAM (default: True)
-        """
-        self.dataset = lerobot_dataset
-        self.normalizer = normalizer
-        self.action_horizon = action_horizon
-        self.prefix_len = prefix_len
-        self.img_size = img_size
-        self.skip_per_task = skip_per_task
-        self.target_tasks = target_tasks
-        self.cache_in_memory = cache_in_memory
-
-        # 1. Index valid episodes matching target tasks
-        self.valid_episodes = self._filter_episodes(shots_per_task, skip_per_task)
-        # 2. Build frame index mapping: dataset_idx -> (episode_id, frame_in_episode)
-        self.valid_frames = self._build_frame_indices()
-
-        # 3. Pre-extract all actions into memory to eliminate redundant disk calls
-        self.action_cache: Dict[int, torch.Tensor] = {}
-        for ep_info in self.valid_episodes:
-            f_idx, t_idx = ep_info["from"], ep_info["to"]
-            for i in range(f_idx, t_idx):
-                try:
-                    a = self.dataset[i]["action"]
-                    if isinstance(a, np.ndarray):
-                        a = torch.from_numpy(a).float()
-                    elif not isinstance(a, torch.Tensor):
-                        a = torch.tensor(a, dtype=torch.float32)
-                    self.action_cache[i] = a
-                except Exception:
-                    pass
-
-        # 4. Optional RAM caching for few-shot demonstration learning
-        self.cached_samples: Optional[List[Dict[str, Any]]] = None
-        if self.cache_in_memory and len(self.valid_frames) > 0:
-            print(f"⚡ Pre-loading {len(self.valid_frames)} demonstration frames into RAM cache for zero-disk-I/O training...")
-            self.cached_samples = []
-            for i in range(len(self.valid_frames)):
-                self.cached_samples.append(self._load_item(i))
-            print(f"✅ All {len(self.cached_samples)} demonstration frames cached in RAM! Training will run at maximum GPU throughput.")
-
-    def _get_all_episodes_metadata(self) -> List[Dict]:
-        """
-        Universally extracts (ep_idx, from, to, task) across all LeRobot versions:
-        - Modern LeRobot (v0.6+ / v3.0): dataset.meta.episodes
-        - Legacy LeRobot (v2.0 / v2.1): dataset.episode_data_index
-        - Fallback: dynamic discovery
-        """
-        episodes_info = []
-
-        # 1. Modern LeRobot (v0.6+ / v3.0) via metadata parquet
-        if hasattr(self.dataset, "meta") and hasattr(self.dataset.meta, "episodes") and self.dataset.meta.episodes is not None:
-            ep_meta = self.dataset.meta.episodes
-            num_ep = len(ep_meta)
-            cols = (
-                ep_meta.column_names if hasattr(ep_meta, "column_names")
-                else list(ep_meta.columns) if hasattr(ep_meta, "columns")
-                else list(ep_meta.features.keys()) if hasattr(ep_meta, "features")
-                else []
-            )
-            from_col = "dataset_from_index" if "dataset_from_index" in cols else None
-            to_col = "dataset_to_index" if "dataset_to_index" in cols else None
-            tasks_col = "tasks" if "tasks" in cols else None
-
-            if from_col and to_col:
-                from_list = ep_meta[from_col]
-                to_list = ep_meta[to_col]
-                tasks_list = ep_meta[tasks_col] if tasks_col else [None] * num_ep
-
-                for ep in range(num_ep):
-                    t_val = tasks_list[ep]
-                    if t_val is not None and isinstance(t_val, (list, np.ndarray)) and len(t_val) > 0:
-                        task_name = str(t_val[0])
-                    else:
-                        task_name = str(t_val or "")
-                    episodes_info.append({
-                        "ep_idx": ep,
-                        "from": int(from_list[ep]),
-                        "to": int(to_list[ep]),
-                        "task": task_name,
-                    })
-                return episodes_info
-
-        # 2. Legacy LeRobot (v2.0 / v2.1)
-        if hasattr(self.dataset, "episode_data_index"):
-            from_tensor = self.dataset.episode_data_index["from"]
-            to_tensor = self.dataset.episode_data_index["to"]
-            for ep in range(len(from_tensor)):
-                f_idx = from_tensor[ep].item()
-                t_idx = to_tensor[ep].item()
-                task_name = self.dataset[f_idx].get("task", "")
-                episodes_info.append({
-                    "ep_idx": ep,
-                    "from": f_idx,
-                    "to": t_idx,
-                    "task": str(task_name),
-                })
-            return episodes_info
-
-        # 3. Fallback: single episode covering all frames
-        total_len = len(self.dataset)
-        episodes_info.append({
-            "ep_idx": 0,
-            "from": 0,
-            "to": total_len,
-            "task": str(self.dataset[0].get("task", "")),
-        })
-        return episodes_info
-
-    def _filter_episodes(self, shots_per_task: Optional[int], skip_per_task: int = 0) -> List[Dict]:
-        """Filters dataset episodes for the target tasks, with optional N-shot quota and initial skip offset."""
-        all_eps = self._get_all_episodes_metadata()
-
-        # If target_tasks is None or 'all', discover all unique tasks across the dataset
-        if self.target_tasks is None or (len(self.target_tasks) == 1 and str(self.target_tasks[0]).lower() == "all"):
-            unique_tasks = []
-            for ep_info in all_eps:
-                t = str(ep_info["task"]).strip()
-                if t and t not in unique_tasks:
-                    unique_tasks.append(t)
-            self.target_tasks = unique_tasks
-            print(f"Dynamically discovered {len(self.target_tasks)} benchmark tasks across dataset for training:")
-            for t_name in self.target_tasks:
-                print(f"  - {t_name}")
-
-        task_seen: Dict[str, int] = {t: 0 for t in self.target_tasks}
-        task_counts: Dict[str, int] = {t: 0 for t in self.target_tasks}
-        selected: List[Dict] = []
-
-        for ep_info in all_eps:
-            task_str = ep_info["task"]
-            task_clean = task_str.replace(" ", "_").lower()
-
-            matched_target = None
-            for target in self.target_tasks:
-                target_clean = target.lower().strip()
-                target_words = target.replace("_", " ").lower().strip()
-
-                if (target_clean == task_clean or 
-                    target_clean in task_clean or 
-                    target_words == task_str.lower().strip() or 
-                    target_words in task_str.lower()):
-                    matched_target = target
-                    break
-
-            if matched_target is not None:
-                task_seen[matched_target] += 1
-                if task_seen[matched_target] > skip_per_task:
-                    if shots_per_task is None or task_counts[matched_target] < shots_per_task:
-                        task_counts[matched_target] += 1
-                        selected.append(ep_info)
-
-        # Fallback if no task matched exactly
-        if len(selected) == 0:
-            offset = skip_per_task * len(self.target_tasks)
-            limit = min(shots_per_task * len(self.target_tasks) if shots_per_task else 15, len(all_eps) - offset)
-            selected = all_eps[offset : offset + limit]
-
-        print(f"Filtered {len(selected)} episodes matching targets across {len(all_eps)} total episodes (skipped initial {skip_per_task}/task):")
-        for ep in selected[:5]:
-            t_display = str(ep['task']).replace("['", "").replace("']", "")[:70]
-            print(f"  - Episode {ep['ep_idx']:3d} ({ep['to'] - ep['from']} frames): {t_display}")
-        if len(selected) > 5:
-            print(f"  ... and {len(selected) - 5} more episodes matching target tasks.")
-        return selected
-
-    def _build_frame_indices(self) -> List[Tuple[int, int, int]]:
-        """
-        Builds a list of tuples: (global_frame_idx, episode_idx, episode_end_idx).
-        This allows O(1) lookup during dataset indexing.
-        """
-        frames = []
-        for ep_info in self.valid_episodes:
-            f_idx = ep_info["from"]
-            t_idx = ep_info["to"]
-            ep_id = ep_info["ep_idx"]
-            for idx in range(f_idx, t_idx):
-                frames.append((idx, ep_id, t_idx))
-        print(f"Total valid training frames indexed: {len(frames):,}")
-        return frames
-
-    def __len__(self) -> int:
-        return len(self.valid_frames)
-
-    def __getitem__(self, index: int) -> Dict[str, torch.Tensor]:
-        """Retrieves sample either from instantaneous RAM cache or computes dynamically."""
-        if self.cached_samples is not None and index < len(self.cached_samples):
-            item = self.cached_samples[index]
-            f_img = (item["image_front"].float() / 255.0) * 2.0 - 1.0
-            w_img = (item["image_wrist"].float() / 255.0) * 2.0 - 1.0 if item.get("image_wrist") is not None else None
-            return {
-                "image_front": f_img,
-                "image_wrist": w_img,
-                "state": item["state"],
-                "actions": item["actions"],
-                "raw_actions": item["raw_actions"],
-                "prefix_actions": item["prefix_actions"],
-                "task": item["task"],
-            }
-
-        item = self._load_item(index)
-        f_img = (item["image_front"].float() / 255.0) * 2.0 - 1.0
-        w_img = (item["image_wrist"].float() / 255.0) * 2.0 - 1.0 if item.get("image_wrist") is not None else None
-        item["image_front"] = f_img
-        item["image_wrist"] = w_img
-        return item
-
-    def _load_item(self, index: int) -> Dict[str, Any]:
-        """Retrieves observation at time t and the H-step future action chunk A_{t:t+H} (images in compact uint8)."""
-        frame_idx, ep_idx, ep_end = self.valid_frames[index]
-        current_sample = self.dataset[frame_idx]
-
-        # 1. Process RGB observations (stored as compact uint8 to prevent system OOM)
-        img_front = current_sample.get("observation.images.image", None)
-        img_wrist = current_sample.get("observation.images.wrist_image", None)
-
-        if img_front is None:
-            for k in current_sample:
-                if "image" in k and "wrist" not in k:
-                    img_front = current_sample[k]
-                    break
-        if img_wrist is None:
-            for k in current_sample:
-                if "wrist" in k:
-                    img_wrist = current_sample[k]
-                    break
-
-        def process_img_uint8(img_raw):
-            if img_raw is None:
-                return torch.zeros((3, self.img_size, self.img_size), dtype=torch.uint8)
-            if isinstance(img_raw, np.ndarray):
-                img_t = torch.from_numpy(img_raw)
-            elif isinstance(img_raw, torch.Tensor):
-                img_t = img_raw
-            else:
-                img_t = torch.tensor(img_raw)
-
-            # Ensure channel-first format [3, H, W]
-            if img_t.ndim == 3 and img_t.shape[-1] == 3:
-                img_t = img_t.permute(2, 0, 1)
-
-            if img_t.dtype != torch.uint8:
-                img_t = (img_t * 255.0).clamp(0, 255).to(torch.uint8)
-
-            if img_t.shape[-2:] != (self.img_size, self.img_size):
-                img_t = F.interpolate(
-                    img_t.float().unsqueeze(0),
-                    size=(self.img_size, self.img_size),
-                    mode="bilinear",
-                    align_corners=False,
-                ).squeeze(0).clamp(0, 255).to(torch.uint8)
-            return img_t
-
-        image_front_uint8 = process_img_uint8(img_front)
-        image_wrist_uint8 = process_img_uint8(img_wrist) if img_wrist is not None else None
-
-        # 2. Extract Robot Proprioceptive State
-        state = current_sample.get("observation.state", torch.zeros(8, dtype=torch.float32))
-        if isinstance(state, np.ndarray):
-            state = torch.from_numpy(state).float()
-        elif not isinstance(state, torch.Tensor):
-            state = torch.tensor(state, dtype=torch.float32)
-
-        # 3. Assemble H = 16 Future Action Chunk via O(1) in-memory action cache
-        action_seq = []
-        for step in range(self.action_horizon):
-            target_idx = min(frame_idx + step, ep_end - 1)
-            raw_action = self.action_cache.get(target_idx, None)
-            if raw_action is None:
-                raw_action = self.dataset[target_idx]["action"]
-                if isinstance(raw_action, np.ndarray):
-                    raw_action = torch.from_numpy(raw_action).float()
-                elif not isinstance(raw_action, torch.Tensor):
-                    raw_action = torch.tensor(raw_action, dtype=torch.float32)
-            action_seq.append(raw_action)
-
-        action_chunk = torch.stack(action_seq, dim=0)  # Shape: [16, 7]
-
-        # 3b. Assemble P = prefix_len Historical Prefix Waypoints
-        prefix_seq = []
-        for p in range(self.prefix_len, 0, -1):
-            prev_idx = max(0, frame_idx - p)
-            raw_prev = self.action_cache.get(prev_idx, None)
-            if raw_prev is None:
-                raw_prev = self.dataset[prev_idx]["action"]
-                if isinstance(raw_prev, np.ndarray):
-                    raw_prev = torch.from_numpy(raw_prev).float()
-                elif not isinstance(raw_prev, torch.Tensor):
-                    raw_prev = torch.tensor(raw_prev, dtype=torch.float32)
-            prefix_seq.append(raw_prev)
-
-        prefix_chunk = torch.stack(prefix_seq, dim=0)  # Shape: [prefix_len, 7]
-
-        # 4. Normalize Action Chunk and Prefix Waypoints
-        normalized_actions = self.normalizer.normalize(action_chunk)
-        normalized_prefix = self.normalizer.normalize(prefix_chunk)
-
-        # 5. Extract Language Instruction string
-        task_instruction = current_sample.get(
-            "task",
-            "pick up the black bowl between the plate and the ramekin and place it on the plate",
-        )
-
-        return {
-            "image_front": image_front_uint8,        # [3, 256, 256] uint8
-            "image_wrist": image_wrist_uint8,        # [3, 256, 256] uint8
-            "state": state,                         # [state_dim]
-            "actions": normalized_actions,          # [16, 7] normalized
-            "raw_actions": action_chunk,            # [16, 7] physical units
-            "prefix_actions": normalized_prefix,    # [4, 7] normalized
-            "task": task_instruction,              # string
-        }
-class LiberoSpatialDataset(Dataset):
-    """
-    Unified dataset wrapper supporting both LeRobot datasets (via lerobot_dataset=...)
-    and HDF5 demonstration episodes (via episodes=... or positional arguments).
-    """
-    def __new__(cls, *args, **kwargs):
-        if 'lerobot_dataset' in kwargs or (len(args) > 0 and not isinstance(args[0], list)):
-            return LiberoSpatialLeRobotDataset(*args, **kwargs)
-        return LiberoSpatialHDF5Dataset(*args, **kwargs)
-
-    @classmethod
-    def from_disk(cls, *args, **kwargs):
-        return LiberoSpatialHDF5Dataset.from_disk(*args, **kwargs)
-
-    @staticmethod
-    def compute_action_stats(*args, **kwargs):
-        return LiberoSpatialHDF5Dataset.compute_action_stats(*args, **kwargs)

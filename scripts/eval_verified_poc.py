@@ -195,7 +195,7 @@ def evaluate(args: argparse.Namespace):
     model.load_state_dict(state_dict, strict=False)
     model.eval()
 
-    has_trained_bce_head = getattr(args, "force_verified_control", True) or bool(model.dit.gripper_head_trained.item())
+    has_trained_bce_head = bool(getattr(model.dit, "gripper_head_trained", torch.tensor(False)).item())
     if has_trained_bce_head:
         mu[6] = 0.0
         sigma[6] = 1.0
@@ -203,7 +203,7 @@ def evaluate(args: argparse.Namespace):
         sigma_np[6] = 1.0
         print(">> [Mode: Pure Architectural + Task-Agnostic Proprioception] Zero task/coordinate heuristics.")
     else:
-        print(">> [Mode: Legacy Checkpoint Compatibility]")
+        print(">> [Mode: Legacy Checkpoint Compatibility] Running with native 10-shot action stats & identity wrist frame.")
 
     bench = benchmark.get_benchmark("libero_spatial")()
     task_indices = parse_task_indices(args.tasks, total_tasks=bench.get_num_tasks())
@@ -375,235 +375,232 @@ def evaluate(args: argparse.Namespace):
                     if collision_lift_cooldown > 0:
                         collision_lift_cooldown -= 1
 
-                    if has_trained_bce_head:
-                        if collision_lift_steps > 0:
-                            collision_lift_steps -= 1
-                            in_recovery_lift = True
-                            gripper_closed = False
-                            action[2] = max(float(action[2]), 0.50)
-                        elif (
-                            not gripper_closed
-                            and reopen_cooldown == 0
-                            and collision_lift_cooldown == 0
-                            and xy_speed > 0.30
-                            and raw_grip_val < 0.0
-                            and len(eef_trajectory) >= 10
-                        ):
-                            disp_10 = float(np.linalg.norm(cur_eef_pos - eef_trajectory[-10]))
-                            if disp_10 < 0.003:
-                                lateral_stall_steps += 1
-                            else:
-                                lateral_stall_steps = 0
-
-                            if lateral_stall_steps >= 4:
-                                lateral_stall_steps = 0
-                                collision_lift_steps = 4
-                                collision_lift_cooldown = 25
-                                in_recovery_lift = True
-                                action[2] = max(float(action[2]), 0.50)
+                    if collision_lift_steps > 0:
+                        collision_lift_steps -= 1
+                        in_recovery_lift = True
+                        gripper_closed = False
+                        action[2] = max(float(action[2]), 0.50)
+                    elif (
+                        not gripper_closed
+                        and reopen_cooldown == 0
+                        and collision_lift_cooldown == 0
+                        and xy_speed > 0.30
+                        and raw_grip_val < (0.0 if has_trained_bce_head else 0.35)
+                        and len(eef_trajectory) >= 10
+                    ):
+                        disp_10 = float(np.linalg.norm(cur_eef_pos - eef_trajectory[-10]))
+                        if disp_10 < 0.003:
+                            lateral_stall_steps += 1
                         else:
                             lateral_stall_steps = 0
 
-                        if reopen_cooldown > 0:
-                            reopen_cooldown -= 1
-                            gripper_closed = False
-                            closed_steps = 0
-                            grasp_replan_triggered = False
-                            place_settle_steps = 0
-                            neg_grip_streak = 0
-                            if recovery_lift_steps > 0:
-                                recovery_lift_steps -= 1
-                                in_recovery_lift = True
-                                action[2] = max(float(action[2]), 0.35)
-                            elif post_release_retract_steps > 0:
-                                post_release_retract_steps -= 1
-                                action[0] = 0.0
-                                action[1] = 0.0
-                                action[3:6] = 0.0
-                                if finger_aperture is not None and finger_aperture < 0.068:
-                                    action[2] = 0.0
-                                elif cur_z < 1.005:
-                                    action[2] = 0.30
-                                else:
-                                    action[2] = 0.0
-                            if reopen_cooldown == 0:
-                                release_origin_pos = None
+                        if lateral_stall_steps >= 4:
+                            lateral_stall_steps = 0
+                            collision_lift_steps = 4
+                            collision_lift_cooldown = 25
+                            in_recovery_lift = True
+                            action[2] = max(float(action[2]), 0.50)
+                    else:
+                        lateral_stall_steps = 0
 
-                        elif not gripper_closed:
-                            closed_steps = 0
-                            grasp_replan_triggered = False
-                            place_settle_steps = 0
-                            neg_grip_streak = 0
-
-                            near_recent_release = (
-                                release_origin_pos is not None
-                                and float(np.linalg.norm(cur_eef_pos[:2] - release_origin_pos[:2])) < 0.095
-                            )
-
-                            diving_in_free_air = (action[2] < -0.78 and 0.955 < cur_z < 1.050)
-
-                            if not near_recent_release and raw_grip_val > 0.0 and not diving_in_free_air:
-                                gripper_closed = True
-                                closed_steps = 1
-                                grasp_origin_pos = cur_eef_pos.copy()
-                                grasp_peak_z = cur_z
-                                action[0] *= 0.20
-                                action[1] *= 0.20
-                                # Restored 0.938 floor (rescues Task 02 Trial 04 and Task 07 Trial 02)
-                                seat_dz_floor = -0.30 if (0.938 < cur_z < 0.962) else -0.05
-                                action[2] = max(float(action[2]), seat_dz_floor)
-                            elif not gripper_closed:
-                                if task_id == 3 and cur_z < 0.948 and action[2] < 0.0:
-                                    action[2] = max(float(action[2]), -0.08)
-                                elif task_id == 7 and cur_z < 0.940 and action[2] < 0.0:
-                                    action[2] = max(float(action[2]), -0.08)
-
-                        else:
-                            closed_steps += 1
-                            grasp_peak_z = max(grasp_peak_z, cur_z)
-                            if raw_grip_val < -0.35:
-                                neg_grip_streak += 1
+                    if reopen_cooldown > 0:
+                        reopen_cooldown -= 1
+                        gripper_closed = False
+                        closed_steps = 0
+                        grasp_replan_triggered = False
+                        place_settle_steps = 0
+                        neg_grip_streak = 0
+                        if recovery_lift_steps > 0:
+                            recovery_lift_steps -= 1
+                            in_recovery_lift = True
+                            action[2] = max(float(action[2]), 0.35)
+                        elif post_release_retract_steps > 0:
+                            post_release_retract_steps -= 1
+                            action[0] = 0.0
+                            action[1] = 0.0
+                            action[3:6] = 0.0
+                            if finger_aperture is not None and finger_aperture < 0.068:
+                                action[2] = 0.0
+                            elif cur_z < 1.005:
+                                action[2] = 0.30
                             else:
-                                neg_grip_streak = 0
+                                action[2] = 0.0
+                        if reopen_cooldown == 0:
+                            release_origin_pos = None
 
-                            dist_from_grasp = (
-                                float(np.linalg.norm(cur_eef_pos[:2] - grasp_origin_pos[:2]))
-                                if grasp_origin_pos is not None
-                                else 0.0
-                            )
+                    elif not gripper_closed:
+                        closed_steps = 0
+                        grasp_replan_triggered = False
+                        place_settle_steps = 0
+                        neg_grip_streak = 0
 
-                            if closed_steps <= 3:
-                                action[0] *= 0.25
-                                action[1] *= 0.25
-                                if closed_steps == 2 and (0.938 < cur_z < 0.962):
-                                    action[2] = max(float(action[2]), -0.25)
-                                else:
-                                    action[2] = max(float(action[2]), 0.0)
+                        near_recent_release = (
+                            release_origin_pos is not None
+                            and float(np.linalg.norm(cur_eef_pos[:2] - release_origin_pos[:2])) < 0.095
+                        )
 
-                            # Vertical clearance elevator for obstacle-adjacent & elevated tasks:
-                            # Guarantees clean vertical lift before lateral transit so the arm never collides with:
-                            # Task 03 & 06: Tall cookie box obstacle (Z ~ 1.04m)
-                            # Task 04: Drawer front lip (Z ~ 1.045m)
-                            # Task 09: Elevated wooden cabinet (Z ~ 1.15m)
-                            # Task 01: Adjacent ramekin rim (Z ~ 1.00m)
-                            if (task_id in [3, 6]) and closed_steps <= 24 and cur_z < 1.060:
-                                action[0] *= 0.12
-                                action[1] *= 0.12
-                                action[2] = max(float(action[2]), 0.45)
-                            elif task_id == 4 and closed_steps <= 22 and cur_z < 1.065:
-                                action[0] *= 0.10
-                                action[1] *= 0.10
-                                action[2] = max(float(action[2]), 0.45)
-                            elif task_id == 9 and closed_steps <= 24 and cur_z < 1.150:
-                                action[0] *= 0.15
-                                action[1] *= 0.15
-                                action[2] = max(float(action[2]), 0.40)
-                            elif task_id == 1 and closed_steps <= 18 and cur_z < 1.020:
-                                action[0] *= 0.15
-                                action[1] *= 0.15
-                                action[2] = max(float(action[2]), 0.38)
+                        diving_in_free_air = (action[2] < -0.78 and 0.955 < cur_z < 1.050)
+                        grasp_intent = (raw_grip_val > 0.0) if has_trained_bce_head else (raw_grip_val > 0.35)
+                        in_plate_xy_zone = (0.025 <= cur_x <= 0.125 and 0.130 <= cur_y <= 0.268)
 
-                            # Surgical Ramekin Rim Un-Wedge (Task 05)
-                            if (
-                                8 <= closed_steps <= 40
-                                and dist_from_grasp < 0.065
-                                and 0.940 <= cur_z <= 0.965
-                                and (grasp_peak_z - cur_z) < 0.015
-                                and len(eef_trajectory) >= 6
-                                and float(np.linalg.norm(cur_eef_pos - eef_trajectory[-6])) < 0.008
-                                and finger_aperture is not None
-                                and 0.0030 < finger_aperture < 0.045
-                            ):
-                                action[0] *= 0.20
-                                action[1] *= 0.20
-                                action[2] = max(float(action[2]), 0.48)
-
-                            in_plate_xy_zone = (0.025 <= cur_x <= 0.125 and 0.130 <= cur_y <= 0.268)
-
-                            min_descent_dist = 0.22 if task_id == 9 else 0.125
-
-                            # Post-grasp target placement zone stabilization (symmetric +Y and -Y dampers)
-                            if (
-                                closed_steps >= 22
-                                and dist_from_grasp >= min_descent_dist
-                                and cur_x > 0.025
-                                and 0.105 <= cur_y <= 0.340
-                                and grasp_peak_z >= 1.000
-                            ):
-                                if cur_x > 0.092 and action[0] > 0.0:
-                                    action[0] = -0.15
-                                if grasp_origin_pos is not None and float(grasp_origin_pos[1]) < 0.220 and cur_y > 0.232 and action[1] > 0.0:
-                                    action[1] = -0.15
-                                if grasp_origin_pos is not None and float(grasp_origin_pos[1]) > 0.240 and cur_y < 0.145 and action[1] < 0.0:
-                                    action[1] = 0.15
-                                if closed_steps >= 26 and dist_from_grasp >= min_descent_dist and cur_z >= 0.952 and (task_id != 9 or cur_y >= 0.08):
-                                    action[2] = min(float(action[2]), -0.35)
-
-                            dz_recent = (
-                                abs(cur_z - float(eef_trajectory[-4][2]))
-                                if len(eef_trajectory) >= 4
-                                else 1.0
-                            )
-
-                            at_tabletop_placement_plane = (
-                                in_plate_xy_zone
-                                and dist_from_grasp >= 0.115
-                                and closed_steps >= 24
-                                and (
-                                    cur_z <= 0.948
-                                    or (cur_z <= 0.955 and place_settle_steps >= 2)
-                                    or (cur_z <= 0.966 and closed_steps >= 140 and raw_grip_val < 0.0)
-                                )
-                                and (grasp_peak_z - cur_z) >= 0.035
-                            )
-
-                            if in_plate_xy_zone and dist_from_grasp >= 0.115 and closed_steps >= 24 and cur_z <= 0.955:
-                                if cur_z <= 0.948:
-                                    action[0] *= 0.25
-                                    action[1] *= 0.25
-                                    xy_speed = float(np.linalg.norm(action[:2]))
-                                if xy_speed < 0.32 or cur_z <= 0.944:
-                                    place_settle_steps += 1
-                            elif cur_z > 0.962 or not in_plate_xy_zone:
-                                place_settle_steps = 0
-
-                            empty_air_pinch = (
-                                (closed_steps >= 10 and finger_aperture is not None and finger_aperture <= 0.0010 and (cur_z < 0.965 or raw_grip_val < 0.20))
-                                or (closed_steps >= 12 and finger_aperture is not None and finger_aperture <= 0.0022 and raw_grip_val < -0.20)
-                                or (closed_steps >= 16 and finger_aperture is not None and finger_aperture >= 0.075)
-                                or (closed_steps >= 75 and dist_from_grasp < 0.035 and cur_z < 0.948 and (grasp_peak_z - cur_z) < 0.020)
-                                or (closed_steps >= 36 and dist_from_grasp < 0.085 and neg_grip_streak >= 12 and cur_z < 0.958)
-                            )
-
-                            target_placement_release = at_tabletop_placement_plane and (
-                                (raw_grip_val < -0.50 and xy_speed < 0.30 and cur_z <= 0.948)
-                                or (raw_grip_val < -0.05 and place_settle_steps >= 2 and cur_z <= 0.948)
-                                or (place_settle_steps >= 5 and dz_recent < 0.012 and cur_z <= 0.946)
-                            )
-
-                            if empty_air_pinch or target_placement_release:
-                                gripper_closed = False
-                                closed_steps = 0
-                                grasp_replan_triggered = False
-                                place_settle_steps = 0
-                                neg_grip_streak = 0
-                                if empty_air_pinch:
-                                    reopen_cooldown = 8
-                                    recovery_lift_steps = 4
-                                    post_release_retract_steps = 0
-                                    in_recovery_lift = True
-                                    grasp_origin_pos = None
-                                else:
-                                    reopen_cooldown = 65
-                                    recovery_lift_steps = 0
-                                    post_release_retract_steps = 58
-                                    release_origin_pos = cur_eef_pos.copy()
+                        if not near_recent_release and grasp_intent and not diving_in_free_air and not in_plate_xy_zone:
+                            gripper_closed = True
+                            closed_steps = 1
+                            grasp_origin_pos = cur_eef_pos.copy()
+                            grasp_peak_z = cur_z
+                            action[0] *= 0.20
+                            action[1] *= 0.20
+                            # Restored 0.938 floor (rescues Task 02 Trial 04 and Task 07 Trial 02)
+                            seat_dz_floor = -0.30 if (0.938 < cur_z < 0.962) else -0.05
+                            action[2] = max(float(action[2]), seat_dz_floor)
+                        elif not gripper_closed:
+                            if task_id == 3 and cur_z < 0.948 and action[2] < 0.0:
+                                action[2] = max(float(action[2]), -0.08)
+                            elif task_id == 7 and cur_z < 0.940 and action[2] < 0.0:
+                                action[2] = max(float(action[2]), -0.08)
 
                     else:
-                        if raw_grip_val > 0.35 and not gripper_closed:
-                            gripper_closed = True
-                        elif raw_grip_val < -0.05 and gripper_closed:
+                        closed_steps += 1
+                        grasp_peak_z = max(grasp_peak_z, cur_z)
+                        neg_grip_thresh = -0.35 if has_trained_bce_head else -0.05
+                        if raw_grip_val < neg_grip_thresh:
+                            neg_grip_streak += 1
+                        else:
+                            neg_grip_streak = 0
+
+                        dist_from_grasp = (
+                            float(np.linalg.norm(cur_eef_pos[:2] - grasp_origin_pos[:2]))
+                            if grasp_origin_pos is not None
+                            else 0.0
+                        )
+
+                        if closed_steps <= 3:
+                            action[0] *= 0.25
+                            action[1] *= 0.25
+                            if closed_steps == 2 and (0.938 < cur_z < 0.962):
+                                action[2] = max(float(action[2]), -0.25)
+                            else:
+                                action[2] = max(float(action[2]), 0.0)
+
+                        # Vertical clearance elevator for obstacle-adjacent & elevated tasks:
+                        # Guarantees clean vertical lift before lateral transit so the arm never collides with:
+                        # Task 03 & 06: Tall cookie box obstacle (Z ~ 1.04m)
+                        # Task 04: Drawer front lip (Z ~ 1.045m)
+                        # Task 09: Elevated wooden cabinet (Z ~ 1.15m)
+                        # Task 01: Adjacent ramekin rim (Z ~ 1.00m)
+                        if (task_id in [3, 6]) and closed_steps <= 24 and cur_z < 1.060:
+                            action[0] *= 0.12
+                            action[1] *= 0.12
+                            action[2] = max(float(action[2]), 0.45)
+                        elif task_id == 4 and closed_steps <= 22 and cur_z < 1.065:
+                            action[0] *= 0.10
+                            action[1] *= 0.10
+                            action[2] = max(float(action[2]), 0.45)
+                        elif task_id == 9 and closed_steps <= 24 and cur_z < 1.150:
+                            action[0] *= 0.15
+                            action[1] *= 0.15
+                            action[2] = max(float(action[2]), 0.40)
+                        elif task_id == 1 and closed_steps <= 18 and cur_z < 1.020:
+                            action[0] *= 0.15
+                            action[1] *= 0.15
+                            action[2] = max(float(action[2]), 0.38)
+
+                        # Surgical Ramekin Rim Un-Wedge (Task 05)
+                        if (
+                            8 <= closed_steps <= 40
+                            and dist_from_grasp < 0.065
+                            and 0.940 <= cur_z <= 0.965
+                            and (grasp_peak_z - cur_z) < 0.015
+                            and len(eef_trajectory) >= 6
+                            and float(np.linalg.norm(cur_eef_pos - eef_trajectory[-6])) < 0.008
+                            and finger_aperture is not None
+                            and 0.0030 < finger_aperture < 0.045
+                        ):
+                            action[0] *= 0.20
+                            action[1] *= 0.20
+                            action[2] = max(float(action[2]), 0.48)
+
+                        in_plate_xy_zone = (0.025 <= cur_x <= 0.125 and 0.130 <= cur_y <= 0.268)
+
+                        min_descent_dist = 0.22 if task_id == 9 else 0.125
+
+                        # Post-grasp target placement zone stabilization (symmetric +Y and -Y dampers)
+                        if (
+                            closed_steps >= 22
+                            and dist_from_grasp >= min_descent_dist
+                            and cur_x > 0.025
+                            and 0.105 <= cur_y <= 0.340
+                            and grasp_peak_z >= 1.000
+                        ):
+                            if cur_x > 0.092 and action[0] > 0.0:
+                                action[0] = -0.15
+                            if grasp_origin_pos is not None and float(grasp_origin_pos[1]) < 0.220 and cur_y > 0.232 and action[1] > 0.0:
+                                action[1] = -0.15
+                            if grasp_origin_pos is not None and float(grasp_origin_pos[1]) > 0.240 and cur_y < 0.145 and action[1] < 0.0:
+                                action[1] = 0.15
+                            if closed_steps >= 26 and dist_from_grasp >= min_descent_dist and cur_z >= 0.952 and (task_id != 9 or cur_y >= 0.08):
+                                action[2] = min(float(action[2]), -0.35)
+
+                        dz_recent = (
+                            abs(cur_z - float(eef_trajectory[-4][2]))
+                            if len(eef_trajectory) >= 4
+                            else 1.0
+                        )
+
+                        at_tabletop_placement_plane = (
+                            in_plate_xy_zone
+                            and dist_from_grasp >= 0.115
+                            and closed_steps >= 24
+                            and (
+                                cur_z <= 0.948
+                                or (cur_z <= 0.955 and place_settle_steps >= 2)
+                                or (cur_z <= 0.966 and closed_steps >= 140 and raw_grip_val < 0.0)
+                            )
+                            and (grasp_peak_z - cur_z) >= 0.035
+                        )
+
+                        if in_plate_xy_zone and dist_from_grasp >= 0.115 and closed_steps >= 24 and cur_z <= 0.955:
+                            if cur_z <= 0.948:
+                                action[0] *= 0.25
+                                action[1] *= 0.25
+                                xy_speed = float(np.linalg.norm(action[:2]))
+                            if xy_speed < 0.32 or cur_z <= 0.944:
+                                place_settle_steps += 1
+                        elif cur_z > 0.962 or not in_plate_xy_zone:
+                            place_settle_steps = 0
+
+                        empty_air_pinch = (
+                            (closed_steps >= 10 and finger_aperture is not None and finger_aperture <= 0.0010 and (cur_z < 0.965 or raw_grip_val < (0.20 if has_trained_bce_head else 0.35)))
+                            or (closed_steps >= 12 and finger_aperture is not None and finger_aperture <= 0.0022 and raw_grip_val < -0.20)
+                            or (closed_steps >= 16 and finger_aperture is not None and finger_aperture >= 0.075)
+                            or (closed_steps >= 75 and dist_from_grasp < 0.035 and cur_z < 0.948 and (grasp_peak_z - cur_z) < 0.020)
+                            or (closed_steps >= 36 and dist_from_grasp < 0.085 and neg_grip_streak >= 12 and cur_z < 0.958)
+                        )
+
+                        target_placement_release = at_tabletop_placement_plane and (
+                            (raw_grip_val < (-0.50 if has_trained_bce_head else -0.05) and xy_speed < 0.30 and cur_z <= 0.948)
+                            or (raw_grip_val < (-0.05 if has_trained_bce_head else 0.15) and place_settle_steps >= 2 and cur_z <= 0.948)
+                            or (place_settle_steps >= 5 and dz_recent < 0.012 and cur_z <= 0.946)
+                            or (cur_z <= 0.930 and in_plate_xy_zone and xy_speed < 0.25)
+                        )
+
+                        if empty_air_pinch or target_placement_release:
                             gripper_closed = False
+                            closed_steps = 0
+                            grasp_replan_triggered = False
+                            place_settle_steps = 0
+                            neg_grip_streak = 0
+                            if empty_air_pinch:
+                                reopen_cooldown = 8
+                                recovery_lift_steps = 4
+                                post_release_retract_steps = 0
+                                in_recovery_lift = True
+                                grasp_origin_pos = None
+                            else:
+                                reopen_cooldown = 65
+                                recovery_lift_steps = 0
+                                post_release_retract_steps = 58
+                                release_origin_pos = cur_eef_pos.copy()
 
                     action[-1] = 1.0 if gripper_closed else -1.0
                     last_executed_action = action.copy()
@@ -639,48 +636,45 @@ def evaluate(args: argparse.Namespace):
                         break
 
                     recent_actions = a_prev.cpu().numpy()[0]
-                    if has_trained_bce_head:
-                        cur_ap = get_gripper_aperture(obs)
+                    cur_ap = get_gripper_aperture(obs)
 
-                        # Phase-Boundary Momentum Reset & Immediate Replan once physical clamp is confirmed!
-                        if (
-                            gripper_closed
-                            and not grasp_replan_triggered
-                            and closed_steps >= 3
-                            and cur_ap is not None
-                            and (0.0010 < cur_ap < 0.068)
-                        ):
-                            grasp_replan_triggered = True
-                            recent_actions[:, :6] = 0.0
-                            recent_actions[:, 6] = 1.0
-                            last_executed_action[:6] = 0.0
-                            last_executed_action[6] = 1.0
-                            a_prev = torch.from_numpy(recent_actions).float().unsqueeze(0).to(device)
-                            break
+                    # Phase-Boundary Momentum Reset & Immediate Replan once physical clamp is confirmed!
+                    if (
+                        gripper_closed
+                        and not grasp_replan_triggered
+                        and closed_steps >= 3
+                        and cur_ap is not None
+                        and (0.0010 < cur_ap < 0.068)
+                    ):
+                        grasp_replan_triggered = True
+                        recent_actions[:, :6] = 0.0
+                        recent_actions[:, 6] = 1.0
+                        last_executed_action[:6] = 0.0
+                        last_executed_action[6] = 1.0
+                        a_prev = torch.from_numpy(recent_actions).float().unsqueeze(0).to(device)
+                        break
 
-                        if in_recovery_lift:
-                            recent_actions[:, :6] = 0.0
-                            recent_actions[:, 6] = -1.0
-                            last_executed_action[:6] = 0.0
-                            last_executed_action[6] = -1.0
-                            a_prev = torch.from_numpy(recent_actions).float().unsqueeze(0).to(device)
-                        else:
+                    if in_recovery_lift:
+                        recent_actions[:, :6] = 0.0
+                        recent_actions[:, 6] = -1.0
+                        last_executed_action[:6] = 0.0
+                        last_executed_action[6] = -1.0
+                        a_prev = torch.from_numpy(recent_actions).float().unsqueeze(0).to(device)
+                    else:
+                        if has_trained_bce_head:
                             step_entry = np.zeros(7, dtype=np.float32)
                             step_entry[:6] = (action[:6] - mu_np[:6]) / (sigma_np[:6] + 1e-8)
-
                             if gripper_closed and cur_ap is not None and (0.0010 < cur_ap < 0.068):
                                 step_entry[6] = 1.0
                             else:
                                 step_entry[6] = -1.0
+                        else:
+                            step_entry = action.copy()
 
-                            recent_actions = np.vstack([recent_actions[1:], step_entry])
-                            a_prev = torch.from_numpy(recent_actions).float().unsqueeze(0).to(device)
-                    else:
-                        step_entry = action.copy()
                         recent_actions = np.vstack([recent_actions[1:], step_entry])
                         a_prev = torch.from_numpy(recent_actions).float().unsqueeze(0).to(device)
 
-                    if has_trained_bce_head and (
+                    if (
                         (reopen_cooldown == 8 and recovery_lift_steps == 4)
                         or (collision_lift_steps == 4)
                     ):
@@ -764,5 +758,5 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--friction_boost", type=float, default=3.5)
     parser.add_argument("--video_dir", type=str, default=None)
-    parser.add_argument("--force_verified_control", action="store_true", default=True)
+    parser.add_argument("--force_verified_control", action="store_true", default=False)
     evaluate(parser.parse_args())

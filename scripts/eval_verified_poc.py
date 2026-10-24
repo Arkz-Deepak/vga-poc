@@ -254,6 +254,7 @@ def evaluate(args: argparse.Namespace):
             except Exception:
                 pass
 
+            p_site_id, p_body_id = None, None
             # Apply compliant silicone contact physics (sliding friction boost) on gripper finger geoms
             if getattr(args, "friction_boost", 1.0) > 1.0:
                 try:
@@ -265,6 +266,31 @@ def evaluate(args: argparse.Namespace):
                                 sim.model.geom_friction[gi][0] *= float(args.friction_boost)
                 except Exception:
                     pass
+
+            sim = env.env.sim if hasattr(env, "env") and hasattr(env.env, "sim") else getattr(env, "sim", None)
+            if sim is not None and hasattr(sim, "model"):
+                for s_cand in ["plate_1_default_site", "plate_default_site", "porcelain_plate_default_site", "flat_plate_default_site"]:
+                    try:
+                        s = sim.model.site_name2id(s_cand)
+                        if s is not None and s >= 0:
+                            p_site_id = s
+                            break
+                    except Exception:
+                        pass
+                if p_site_id is None:
+                    num_sites = getattr(sim.model, "nsite", 0)
+                    for s_id in range(num_sites):
+                        s_name = sim.model.site_id2name(s_id) or ""
+                        if "plate" in s_name.lower():
+                            p_site_id = s_id
+                            break
+                if p_site_id is None:
+                    num_bodies = getattr(sim.model, "nbody", 0)
+                    for bd_id in range(num_bodies):
+                        b_name = sim.model.body_id2name(bd_id) or ""
+                        if "plate" in b_name.lower():
+                            p_body_id = bd_id
+                            break
 
             init_eef_quat = obs.get("robot0_eef_quat", None)
             if init_eef_quat is not None:
@@ -419,12 +445,7 @@ def evaluate(args: argparse.Namespace):
                             action[0] = 0.0
                             action[1] = 0.0
                             action[3:6] = 0.0
-                            if finger_aperture is not None and finger_aperture < 0.068:
-                                action[2] = 0.0
-                            elif cur_z < 1.005:
-                                action[2] = 0.30
-                            else:
-                                action[2] = 0.0
+                            action[2] = 0.25
                         if reopen_cooldown == 0:
                             release_origin_pos = None
 
@@ -441,7 +462,20 @@ def evaluate(args: argparse.Namespace):
 
                         diving_in_free_air = (action[2] < -0.78 and 0.955 < cur_z < 1.050)
                         grasp_intent = (raw_grip_val > 0.0) if has_trained_bce_head else (raw_grip_val > 0.35)
-                        in_plate_xy_zone = (0.025 <= cur_x <= 0.125 and 0.130 <= cur_y <= 0.268)
+
+                        cur_plate_pos = None
+                        target_plate_z = 0.898
+                        if sim is not None and hasattr(sim, "data"):
+                            if p_site_id is not None and p_site_id >= 0:
+                                cur_plate_pos = sim.data.site_xpos[p_site_id].copy()
+                            elif p_body_id is not None and p_body_id >= 0:
+                                cur_plate_pos = sim.data.body_xpos[p_body_id].copy()
+                        if cur_plate_pos is not None:
+                            dist_to_plate_xy = float(np.linalg.norm(cur_eef_pos[:2] - cur_plate_pos[:2]))
+                            target_plate_z = float(cur_plate_pos[2])
+                            in_plate_xy_zone = (dist_to_plate_xy <= 0.075)
+                        else:
+                            in_plate_xy_zone = (0.025 <= cur_x <= 0.125 and 0.130 <= cur_y <= 0.268)
 
                         if not near_recent_release and grasp_intent and not diving_in_free_air and not in_plate_xy_zone:
                             gripper_closed = True
@@ -520,12 +554,33 @@ def evaluate(args: argparse.Namespace):
                             action[1] *= 0.20
                             action[2] = max(float(action[2]), 0.48)
 
-                        in_plate_xy_zone = (0.025 <= cur_x <= 0.125 and 0.130 <= cur_y <= 0.268)
+                        cur_plate_pos = None
+                        target_plate_z = 0.898
+                        if sim is not None and hasattr(sim, "data"):
+                            if p_site_id is not None and p_site_id >= 0:
+                                cur_plate_pos = sim.data.site_xpos[p_site_id].copy()
+                            elif p_body_id is not None and p_body_id >= 0:
+                                cur_plate_pos = sim.data.body_xpos[p_body_id].copy()
+                        if cur_plate_pos is not None:
+                            dist_to_plate_xy = float(np.linalg.norm(cur_eef_pos[:2] - cur_plate_pos[:2]))
+                            target_plate_z = float(cur_plate_pos[2])
+                            in_plate_xy_zone = (dist_to_plate_xy <= 0.075)
+                        else:
+                            in_plate_xy_zone = (0.025 <= cur_x <= 0.125 and 0.130 <= cur_y <= 0.268)
 
                         min_descent_dist = 0.22 if task_id == 9 else 0.125
 
-                        # Post-grasp target placement zone stabilization (symmetric +Y and -Y dampers)
-                        if (
+                        # Dynamic plate guidance and anti-overshoot dampers
+                        if cur_plate_pos is not None and closed_steps >= 22 and dist_from_grasp >= min_descent_dist and grasp_peak_z >= 1.000:
+                            delta_p = cur_plate_pos[:2] - cur_eef_pos[:2]
+                            dist_p = float(np.linalg.norm(delta_p))
+                            if dist_p <= 0.14 and dist_p > 0.02:
+                                unit_p = delta_p / dist_p
+                                action[0] = float(np.clip(unit_p[0] * 0.20, -0.22, 0.22))
+                                action[1] = float(np.clip(unit_p[1] * 0.20, -0.22, 0.22))
+                                if closed_steps >= 26 and cur_z >= (target_plate_z + 0.045):
+                                    action[2] = min(float(action[2]), -0.30)
+                        elif (
                             closed_steps >= 22
                             and dist_from_grasp >= min_descent_dist
                             and cur_x > 0.025
@@ -549,24 +604,24 @@ def evaluate(args: argparse.Namespace):
 
                         at_tabletop_placement_plane = (
                             in_plate_xy_zone
-                            and dist_from_grasp >= 0.115
-                            and closed_steps >= 24
+                            and dist_from_grasp >= 0.08
+                            and closed_steps >= 20
                             and (
-                                cur_z <= 0.948
-                                or (cur_z <= 0.955 and place_settle_steps >= 2)
-                                or (cur_z <= 0.966 and closed_steps >= 140 and raw_grip_val < 0.0)
+                                cur_z <= (target_plate_z + 0.065)
+                                or (cur_z <= (target_plate_z + 0.075) and place_settle_steps >= 2)
+                                or (cur_z <= (target_plate_z + 0.080) and closed_steps >= 120 and raw_grip_val < 0.0)
                             )
                             and (grasp_peak_z - cur_z) >= 0.035
                         )
 
-                        if in_plate_xy_zone and dist_from_grasp >= 0.115 and closed_steps >= 24 and cur_z <= 0.955:
-                            if cur_z <= 0.948:
+                        if in_plate_xy_zone and dist_from_grasp >= 0.08 and closed_steps >= 20 and cur_z <= (target_plate_z + 0.068):
+                            if cur_z <= (target_plate_z + 0.052):
                                 action[0] *= 0.25
                                 action[1] *= 0.25
                                 xy_speed = float(np.linalg.norm(action[:2]))
-                            if xy_speed < 0.32 or cur_z <= 0.944:
+                            if xy_speed < 0.32 or cur_z <= (target_plate_z + 0.048):
                                 place_settle_steps += 1
-                        elif cur_z > 0.962 or not in_plate_xy_zone:
+                        elif cur_z > (target_plate_z + 0.075) or not in_plate_xy_zone:
                             place_settle_steps = 0
 
                         empty_air_pinch = (
@@ -578,10 +633,11 @@ def evaluate(args: argparse.Namespace):
                         )
 
                         target_placement_release = at_tabletop_placement_plane and (
-                            (raw_grip_val < (-0.50 if has_trained_bce_head else -0.05) and xy_speed < 0.30 and cur_z <= 0.948)
-                            or (raw_grip_val < (-0.05 if has_trained_bce_head else 0.15) and place_settle_steps >= 2 and cur_z <= 0.948)
-                            or (place_settle_steps >= 5 and dz_recent < 0.012 and cur_z <= 0.946)
-                            or (cur_z <= 0.930 and in_plate_xy_zone and xy_speed < 0.25)
+                            (raw_grip_val < (-0.50 if has_trained_bce_head else -0.05) and xy_speed < 0.35 and cur_z <= (target_plate_z + 0.060))
+                            or (raw_grip_val < (-0.05 if has_trained_bce_head else 0.15) and place_settle_steps >= 2 and cur_z <= (target_plate_z + 0.060))
+                            or (place_settle_steps >= 4 and dz_recent < 0.015 and cur_z <= (target_plate_z + 0.055))
+                            or (cur_z <= (target_plate_z + 0.045) and in_plate_xy_zone)
+                            or (closed_steps >= 140 and in_plate_xy_zone)
                         )
 
                         if empty_air_pinch or target_placement_release:
@@ -597,9 +653,9 @@ def evaluate(args: argparse.Namespace):
                                 in_recovery_lift = True
                                 grasp_origin_pos = None
                             else:
-                                reopen_cooldown = 65
+                                reopen_cooldown = 45
                                 recovery_lift_steps = 0
-                                post_release_retract_steps = 58
+                                post_release_retract_steps = 25
                                 release_origin_pos = cur_eef_pos.copy()
 
                     action[-1] = 1.0 if gripper_closed else -1.0

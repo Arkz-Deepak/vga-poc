@@ -13,11 +13,22 @@ class SchmittTriggerGripper:
         self,
         low_thresh: float = CONFIG.schmitt_low,
         high_thresh: float = CONFIG.schmitt_high,
-        initial_state: float = 0.0):
+        initial_state: float = -1.0,
+        min_hold_steps: int = 15,
+        min_approach_steps: int = 15,
+    ):
         self.low_thresh = low_thresh
         self.high_thresh = high_thresh
         self.initial_state = float(initial_state)
         self.current_state = float(initial_state)
+        self.min_hold_steps = min_hold_steps
+        self.min_approach_steps = min_approach_steps
+        self.steps_in_state = 0
+        self.open_val = -1.0
+        self.close_val = 1.0
+
+    def step(self, raw_gripper_act: Any) -> float:
+        return self.update(raw_gripper_act)
 
     def update(self, raw_gripper_act: Any) -> float:
         """

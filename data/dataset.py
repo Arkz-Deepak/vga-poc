@@ -17,6 +17,7 @@ import glob
 import json
 import math
 import os
+import pathlib
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import h5py
@@ -208,6 +209,67 @@ def refine_grasp_and_append_release_tail(
         gripper_qpos_ext = None
 
     return front_ext, wrist_ext, depth_ext, eef_pos_ext, eef_quat_ext, eef_ori_ext, gripper_qpos_ext, acts_ext
+
+
+class Normalizer:
+    """Handles bidirectional normalization of 7D action vectors using empirical statistics."""
+
+    def __init__(self, stats_path: Optional[Union[str, pathlib.Path]] = None):
+        target_path: Optional[pathlib.Path] = None
+        repo_root = pathlib.Path(__file__).resolve().parent.parent
+
+        candidate_paths = []
+        if stats_path is not None:
+            candidate_paths.append(pathlib.Path(stats_path))
+            candidate_paths.append(repo_root / stats_path)
+            candidate_paths.append(repo_root / "configs" / pathlib.Path(stats_path).name)
+
+        candidate_paths.extend([
+            repo_root / "configs" / "action_stats.json",
+            repo_root / "configs" / "action_stats_10shot.json",
+            pathlib.Path("configs/action_stats.json"),
+            pathlib.Path("configs/action_stats_10shot.json"),
+            pathlib.Path("/kaggle/working/vga-poc/configs/action_stats.json"),
+            pathlib.Path("/kaggle/working/vga-poc/configs/action_stats_10shot.json"),
+            pathlib.Path("/kaggle/working/configs/action_stats.json"),
+        ])
+
+        for p in candidate_paths:
+            try:
+                if p.is_file():
+                    target_path = p
+                    break
+            except Exception:
+                pass
+
+        if target_path is not None and target_path.exists():
+            with open(target_path, "r") as f:
+                stats = json.load(f)
+            mean_key = "mu" if "mu" in stats else ("mu_d" if "mu_d" in stats else "mean")
+            std_key = "sigma" if "sigma" in stats else ("sigma_d" if "sigma_d" in stats else "std")
+            self.mu_d = torch.tensor(stats[mean_key], dtype=torch.float32)
+            self.sigma_d = torch.tensor(stats[std_key], dtype=torch.float32)
+            self.sigma_d = torch.clamp(self.sigma_d, min=1e-5)
+            self.sigma_pos_sq = stats.get("sigma_pos_sq", 0.18988)
+            self.sigma_rot_sq = stats.get("sigma_rot_sq", 0.00321)
+            self.stats_path = str(target_path)
+        else:
+            self.mu_d = torch.tensor([0.172505, 0.101684, -0.144693, 0.009553, 0.000129, -0.032239, -0.012093], dtype=torch.float32)
+            self.sigma_d = torch.tensor([0.507023, 0.206400, 0.616726, 0.043281, 0.075032, 0.068463, 0.999927], dtype=torch.float32)
+            self.sigma_d = torch.clamp(self.sigma_d, min=1e-5)
+            self.sigma_pos_sq = 0.22667457
+            self.sigma_rot_sq = 0.00406339
+            self.stats_path = "default_empirical"
+
+    def normalize(self, actions: torch.Tensor) -> torch.Tensor:
+        mu = self.mu_d.to(device=actions.device, dtype=actions.dtype)
+        sigma = self.sigma_d.to(device=actions.device, dtype=actions.dtype)
+        return (actions - mu) / sigma
+
+    def unnormalize(self, norm_actions: torch.Tensor) -> torch.Tensor:
+        mu = self.mu_d.to(device=norm_actions.device, dtype=norm_actions.dtype)
+        sigma = self.sigma_d.to(device=norm_actions.device, dtype=norm_actions.dtype)
+        return norm_actions * sigma + mu
 
 
 class LiberoSpatialDataset(Dataset):

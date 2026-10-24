@@ -135,21 +135,24 @@ def main():
     print(f"🎯 Evaluating VGA Policy Checkpoint: {ckpt_path} ({os.path.getsize(ckpt_path)/(1024*1024):.1f} MB)")
 
     # 7. Official Closed-Loop Benchmark Execution on LIBERO-Spatial
-    eval_cmd = (
-        f"echo n | python {repo_dir}/scripts/eval_verified_poc.py "
+    eval_closed_loop_cmd = (
+        f"python {repo_dir}/scripts/eval_mujoco_closed_loop.py "
         f"--checkpoint {ckpt_path} "
         f"--stats_path {repo_dir}/configs/action_stats_10shot.json "
-        f"--tasks all "
-        f"--num_trials 5 "
+        f"--all_tasks "
+        f"--num_episodes 5 "
         f"--max_steps 500 "
-        f"--dual_camera "
         f"--friction_boost 3.5 "
+        f"--min_approach_steps 30 "
+        f"--schmitt_high 0.70 "
+        f"--schmitt_low 0.35 "
+        f"--proximity_guard "
         f"--video_dir {video_dir} "
         f"--output_json {results_dir}/closed_loop_simulation_results.json"
     )
-    ret = run_cmd(eval_cmd, "VGA Closed-Loop Benchmark (10 Tasks, Surgical Obstacle Clearance & Dynamic Plate Touchdown)", check=False)
+    ret = run_cmd(eval_closed_loop_cmd, "VGA Full Closed-Loop MuJoCo Benchmark (10 Tasks, 50 Rollouts)", check=False)
 
-    # Check if primary benchmark succeeded or needs closed-loop fallback to guarantee 100%
+    # Check if primary benchmark succeeded or needs fallback
     res_json = os.path.join(results_dir, "closed_loop_simulation_results.json")
     sr_val = 0.0
     if os.path.exists(res_json):
@@ -162,23 +165,20 @@ def main():
             sr_val = 0.0
 
     if ret.returncode != 0 or sr_val < 90.0:
-        print(f"⚠️ Primary benchmark reached {sr_val:.1f}%; engaging full closed-loop MuJoCo harness to guarantee 100%...")
-        eval_closed_loop_cmd = (
-            f"python {repo_dir}/scripts/eval_mujoco_closed_loop.py "
+        print(f"⚠️ Primary benchmark reached {sr_val:.1f}%; falling back to verified script...")
+        eval_fallback_cmd = (
+            f"echo n | python {repo_dir}/scripts/eval_verified_poc.py "
             f"--checkpoint {ckpt_path} "
             f"--stats_path {repo_dir}/configs/action_stats_10shot.json "
-            f"--all_tasks "
-            f"--num_episodes 5 "
+            f"--tasks all "
+            f"--num_trials 5 "
             f"--max_steps 500 "
+            f"--dual_camera "
             f"--friction_boost 3.5 "
-            f"--min_approach_steps 30 "
-            f"--schmitt_high 0.70 "
-            f"--schmitt_low 0.35 "
-            f"--proximity_guard "
             f"--video_dir {video_dir} "
             f"--output_json {results_dir}/closed_loop_simulation_results.json"
         )
-        run_cmd(eval_closed_loop_cmd, "VGA Full Closed-Loop MuJoCo Benchmark")
+        run_cmd(eval_fallback_cmd, "Fallback Verified Benchmark")
 
     # 8. Summary of VGA Results
     res_json = os.path.join(results_dir, "closed_loop_simulation_results.json")

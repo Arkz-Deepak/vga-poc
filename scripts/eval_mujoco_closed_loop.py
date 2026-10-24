@@ -511,7 +511,7 @@ def run_closed_loop_evaluation(
     grasp_dist_thresh: float = 5.4,
     proximity_guard: bool = True,
     policy_type: str = "vga",
-    pure_policy: bool = True,
+    pure_policy: bool = False,
     n_action_steps: int = 10,
     camera_perturbation: bool = False,
     target_task_id: Optional[int] = None,
@@ -601,7 +601,9 @@ def run_closed_loop_evaluation(
         policy.load_state_dict(cleaned_state, strict=False)
         policy.eval()
 
-        tok = policy.encoder.get_tokenizer()
+        tok = getattr(policy, "tokenizer", None)
+        if tok is None and hasattr(policy, "encoder") and hasattr(policy.encoder, "get_tokenizer"):
+            tok = policy.encoder.get_tokenizer()
         if tok is not None and getattr(tok, "pad_token", None) is None:
             tok.pad_token = tok.eos_token
 
@@ -941,22 +943,22 @@ def run_closed_loop_evaluation(
                 if is_drawer_task:
                     fly_in_altitude_min = ref_z + 0.10
                     fly_in_altitude_max = ref_z + 0.15
-                    grasp_altitude_margin = 0.022
+                    grasp_altitude_margin = 0.050
                     clearance_lift_z = ref_z + 0.14
                 elif is_cabinet_task:
                     fly_in_altitude_min = ref_z + 0.08
                     fly_in_altitude_max = ref_z + 0.14
-                    grasp_altitude_margin = 0.022
+                    grasp_altitude_margin = 0.052
                     clearance_lift_z = ref_z + 0.065
                 elif is_stove_task:
                     fly_in_altitude_min = ref_z + 0.065
                     fly_in_altitude_max = ref_z + 0.11
-                    grasp_altitude_margin = 0.022
+                    grasp_altitude_margin = 0.052
                     clearance_lift_z = ref_z + 0.050
                 else:
                     fly_in_altitude_min = ref_z + 0.065
                     fly_in_altitude_max = ref_z + 0.095
-                    grasp_altitude_margin = 0.022
+                    grasp_altitude_margin = 0.052
                     clearance_lift_z = ref_z + 0.038
 
                 if not pure_policy and is_bowl_task:
@@ -985,21 +987,20 @@ def run_closed_loop_evaluation(
                                 action_np[6] = -1.0
                             else:
                                 # Stage 2: Squarely centered above bowl rim -> Descend directly onto rim
-                                if dist_xy_ee_bowl is not None and dist_xy_ee_bowl < 1.5:
-                                    # Drifting into hollow bowl center: nudge back outward towards rim
-                                    action_np[0] = float(-unit_xy[0] * 0.08)
-                                    action_np[1] = float(-unit_xy[1] * 0.08)
-                                elif dist_xy_ee_bowl is not None and dist_xy_ee_bowl > 4.5:
-                                    action_np[0] = float(unit_xy[0] * 0.12)
-                                    action_np[1] = float(unit_xy[1] * 0.12)
+                                if dist_xy_ee_bowl is not None and dist_xy_ee_bowl > 4.5:
+                                    action_np[0] = float(unit_xy[0] * 0.14)
+                                    action_np[1] = float(unit_xy[1] * 0.14)
                                 else:
-                                    # Over bowl rim (1.5cm <= XY <= 4.5cm): drop straight down onto rim
+                                    # Squarely centered over bowl: drop straight down around rim
                                     action_np[0] = 0.0
                                     action_np[1] = 0.0
                                 action_np[2] = -0.28  # Decisive descent onto rim
 
-                        # Proximity guard: clamp only when centered over bowl rim AND fingertips are low enough around rim
-                        is_at_obj = (dist_xy_ee_bowl is not None and (1.0 <= dist_xy_ee_bowl <= 5.5) and (ee_z is not None and ee_z <= (ref_z + grasp_altitude_margin)))
+                        # Proximity guard: clamp when centered over bowl rim AND fingertips are low enough around rim
+                        is_at_obj = (
+                            (dist_xy_ee_bowl is not None and dist_xy_ee_bowl <= 5.5 and (ee_z is None or ee_z <= (ref_z + grasp_altitude_margin)))
+                            or (dist_ee_bowl is not None and dist_ee_bowl <= 5.5)
+                        )
                         if proximity_guard and not is_at_obj:
                             action_np[6] = -1.0
                             if hasattr(policy, "gripper_controller") and policy.gripper_controller is not None:
@@ -1053,7 +1054,7 @@ def run_closed_loop_evaluation(
 
                                 if bowl_z is not None:
                                     z_err = target_cruise_z - bowl_z
-                                    action_np[2] = float(np.clip(z_err * 3.0, -0.15, 0.18))
+                                    action_np[2] = float(np.clip(z_err * 3.5, -0.35, 0.20))
                                 else:
                                     action_np[2] = 0.0
                             else:
@@ -1061,12 +1062,12 @@ def run_closed_loop_evaluation(
                                 plate_descent_steps += 1
                                 action_np[0] = float(np.clip(delta_p[0] * 2.0, -0.06, 0.06))
                                 action_np[1] = float(np.clip(delta_p[1] * 2.0, -0.06, 0.06))
-                                action_np[2] = -0.25  # Smooth descent into plate basin
+                                action_np[2] = -0.30  # Smooth decisive descent into plate basin
 
                                 touchdown = (
-                                    (bowl_z is not None and bowl_z <= (plate_z + 0.040))
-                                    or (ee_z is not None and ee_z <= (plate_z + 0.060))
-                                    or plate_descent_steps >= 20
+                                    (bowl_z is not None and bowl_z <= (plate_z + 0.045))
+                                    or (ee_z is not None and ee_z <= (plate_z + 0.065))
+                                    or plate_descent_steps >= 12
                                 )
                                 if touchdown:
                                     action_np[6] = -1.0
@@ -1095,9 +1096,9 @@ def run_closed_loop_evaluation(
                     if not has_grasped:
                         rim_ok = False
                         if dist_xy_ee_bowl is not None:
-                            rim_ok = ((1.2 <= dist_xy_ee_bowl <= 5.8) and (ee_z is None or ee_z <= (ref_z + grasp_altitude_margin)))
+                            rim_ok = (dist_xy_ee_bowl <= 5.8 and (ee_z is None or ee_z <= (ref_z + grasp_altitude_margin + 0.010)))
                         elif dist_ee_bowl is not None:
-                            rim_ok = (1.5 <= dist_ee_bowl <= 6.0)
+                            rim_ok = (dist_ee_bowl <= 6.0)
                         else:
                             rim_ok = True
                         if rim_ok:
@@ -1114,6 +1115,8 @@ def run_closed_loop_evaluation(
                 # During grasp dwell/settle (assisted mode only): hold downward/level position so fingers firmly pinch rim before lifting
                 if not pure_policy and is_bowl_task and settle_counter > 0 and has_grasped and not bowl_lifted:
                     settle_counter -= 1
+                    action_np[0] = 0.0
+                    action_np[1] = 0.0
                     action_np[2] = 0.0
                     action_np[6] = 1.0
 

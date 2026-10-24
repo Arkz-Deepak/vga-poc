@@ -662,6 +662,15 @@ class VGAPolicy(nn.Module):
             eef_pos=eef_pos
         )
 
+    @property
+    def encoder(self):
+        class _EncoderCompat:
+            def __init__(self, tok):
+                self._tok = tok
+            def get_tokenizer(self):
+                return self._tok
+        return _EncoderCompat(getattr(self, "tokenizer", None))
+
     def reset(self):
         if hasattr(self, "gripper_controller") and self.gripper_controller is not None:
             self.gripper_controller.reset()
@@ -708,12 +717,16 @@ class VGAPolicy(nn.Module):
             t_base = torch.eye(4, dtype=torch.float32, device=dev).unsqueeze(0)
             t_base[0, :3, 3] = torch.tensor([0.0, -0.25, 0.60], dtype=torch.float32, device=dev)
 
+            prompt = batch.get("prompt", batch.get("task_desc", None))
             chunk = self.sample_actions(
                 rgb=image_front,
                 t_base_cam=t_base,
                 a_prev=self.a_prev,
-                rgb_wrist=image_wrist
+                rgb_wrist=image_wrist,
+                prompt=prompt
             )
+            if hasattr(self, "normalizer") and self.normalizer is not None:
+                chunk = self.normalizer.unnormalize(chunk)
             chunk_np = chunk[0].detach().cpu().numpy()
             for step_act in chunk_np:
                 self.action_queue.append(step_act.copy())

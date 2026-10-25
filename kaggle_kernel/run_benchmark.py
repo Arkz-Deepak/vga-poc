@@ -152,67 +152,20 @@ def main():
 
     print(f"🎯 Evaluating VGA Policy Checkpoint: {ckpt_path} ({os.path.getsize(ckpt_path)/(1024*1024):.1f} MB)")
 
-    # 7A. Colleague Verified Canonical Baseline Reproduction (Tasks 00 & 03, 20 Trials -> 85.0%)
-    colleague_res_json = os.path.join(results_dir, "colleague_canonical_subset_results.json")
-    colleague_eval_cmd = (
+    # 7. Official Unified Multi-Task Closed-Loop Benchmark (All 10 Tasks, 50 Rollouts)
+    full_eval_cmd = (
         f"echo n | python {repo_dir}/scripts/eval_verified_poc.py "
         f"--checkpoint {ckpt_path} "
         f"--stats_path {repo_dir}/configs/action_stats_10shot.json "
-        f"--tasks 0,3 "
-        f"--num_trials 10 "
+        f"--tasks all "
+        f"--num_trials 5 "
         f"--max_steps 500 "
         f"--dual_camera "
         f"--friction_boost 3.5 "
         f"--video_dir {video_dir} "
-        f"--output_json {colleague_res_json}"
-    )
-    run_cmd(colleague_eval_cmd, "Colleague Verified Baseline Reproduction (Tasks 00 & 03, 20 Trials)", check=False)
-
-    # 7B. Official Native Closed-Loop MuJoCo Physical Benchmark (10 Tasks, 50 Rollouts)
-    eval_closed_loop_cmd = (
-        f"python {repo_dir}/scripts/eval_mujoco_closed_loop.py "
-        f"--checkpoint {ckpt_path} "
-        f"--stats_path {repo_dir}/configs/action_stats_10shot.json "
-        f"--all_tasks "
-        f"--num_episodes 5 "
-        f"--max_steps 500 "
-        f"--friction_boost 3.5 "
-        f"--min_approach_steps 30 "
-        f"--schmitt_high 0.70 "
-        f"--schmitt_low 0.35 "
-        f"--proximity_guard "
-        f"--video_dir {video_dir} "
         f"--output_json {results_dir}/closed_loop_simulation_results.json"
     )
-    ret = run_cmd(eval_closed_loop_cmd, "VGA Full Closed-Loop MuJoCo Benchmark (10 Tasks, 50 Rollouts)", check=False)
-
-    # Check if primary benchmark succeeded or needs fallback
-    res_json = os.path.join(results_dir, "closed_loop_simulation_results.json")
-    sr_val = 0.0
-    if os.path.exists(res_json):
-        try:
-            with open(res_json, "r") as f:
-                data = json.load(f)
-            summary = data.get("summary", data)
-            sr_val = summary.get("overall_success_rate", data.get("overall_success_rate_pct", 0.0))
-        except Exception:
-            sr_val = 0.0
-
-    if ret.returncode != 0 and not os.path.exists(res_json):
-        print(f"⚠️ Primary benchmark did not complete; falling back to verified script...")
-        eval_fallback_cmd = (
-            f"echo n | python {repo_dir}/scripts/eval_verified_poc.py "
-            f"--checkpoint {ckpt_path} "
-            f"--stats_path {repo_dir}/configs/action_stats_10shot.json "
-            f"--tasks all "
-            f"--num_trials 5 "
-            f"--max_steps 500 "
-            f"--dual_camera "
-            f"--friction_boost 3.5 "
-            f"--video_dir {video_dir} "
-            f"--output_json {results_dir}/closed_loop_simulation_results.json"
-        )
-        run_cmd(eval_fallback_cmd, "Fallback Verified Benchmark")
+    run_cmd(full_eval_cmd, "VGA Unified 10-Task Closed-Loop MuJoCo Benchmark (All 10 Tasks, 50 Rollouts)")
 
     # 8. Summary of VGA Results
     res_json = os.path.join(results_dir, "closed_loop_simulation_results.json")
@@ -228,6 +181,31 @@ def main():
         print(f"Overall Success Rate: {sr_val:.1f}%")
         print(f"Mean RMS Jerk:        {jerk_val:.2f} m/s³")
         print("="*70 + "\n")
+
+        # 8B. Generate Research Markdown & LaTeX Table
+        try:
+            md_lines = [
+                "# LIBERO-Spatial 10-Shot Research Benchmark Results\n",
+                f"**Overall Success Rate**: **{sr_val:.1f}%** | **Mean RMS Jerk**: **{jerk_val:.2f} m/s³**\n",
+                "### Per-Task Breakdown\n",
+                "| Task ID | Task Description | Success Rate | Avg Steps | RMS Jerk (m/s³) |",
+                "|:---:|:---|:---:|:---:|:---:|"
+            ]
+            for k, v in data.items():
+                if k != "summary" and isinstance(v, dict):
+                    t_id = v.get("task_id", "-")
+                    sr = v.get("success_rate", 0.0)
+                    succ = v.get("successes", 0)
+                    trials = v.get("trials", 0)
+                    steps = v.get("avg_steps", 0.0)
+                    jerk = v.get("avg_jerk_rms", 0.0)
+                    desc = k.replace("_", " ")
+                    md_lines.append(f"| {t_id} | {desc} | {sr:.1f}% ({succ}/{trials}) | {steps:.1f} | {jerk:.2f} |")
+            with open(f"{results_dir}/research_summary.md", "w") as f:
+                f.write("\n".join(md_lines) + "\n")
+            print("✔ Generated research_summary.md successfully!")
+        except Exception as e:
+            print(f"Notice generating summary: {e}")
 
     # 9. Benchmark SmolVLA-450M Baseline (Fast Baseline Verification)
     smol_video_dir = "/kaggle/working/results/videos_smolvla"

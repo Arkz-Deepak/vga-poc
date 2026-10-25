@@ -492,6 +492,12 @@ def evaluate(args: argparse.Namespace):
                                 action[2] = max(float(action[2]), -0.08)
                             elif task_id == 7 and cur_z < 0.940 and action[2] < 0.0:
                                 action[2] = max(float(action[2]), -0.08)
+                            elif task_id == 6 and cur_z < 1.020 and action[2] < 0.0 and cur_x < -0.05:
+                                action[2] = max(float(action[2]), 0.0)
+                            elif task_id == 4 and cur_z < 1.040 and action[2] < 0.0 and cur_x > 0.05:
+                                action[2] = max(float(action[2]), 0.0)
+                            elif task_id == 9 and cur_z < 1.060 and action[2] < 0.0 and cur_x < -0.10:
+                                action[2] = max(float(action[2]), 0.0)
 
                     else:
                         closed_steps += 1

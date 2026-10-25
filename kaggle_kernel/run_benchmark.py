@@ -164,8 +164,8 @@ def main():
         except Exception:
             sr_val = 0.0
 
-    if ret.returncode != 0 or sr_val < 90.0:
-        print(f"⚠️ Primary benchmark reached {sr_val:.1f}%; falling back to verified script...")
+    if ret.returncode != 0 and not os.path.exists(res_json):
+        print(f"⚠️ Primary benchmark did not complete; falling back to verified script...")
         eval_fallback_cmd = (
             f"echo n | python {repo_dir}/scripts/eval_verified_poc.py "
             f"--checkpoint {ckpt_path} "

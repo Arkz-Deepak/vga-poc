@@ -943,22 +943,22 @@ def run_closed_loop_evaluation(
                 if is_drawer_task:
                     fly_in_altitude_min = ref_z + 0.10
                     fly_in_altitude_max = ref_z + 0.15
-                    grasp_altitude_margin = 0.050
+                    grasp_altitude_margin = 0.056
                     clearance_lift_z = ref_z + 0.14
                 elif is_cabinet_task:
                     fly_in_altitude_min = ref_z + 0.08
                     fly_in_altitude_max = ref_z + 0.14
-                    grasp_altitude_margin = 0.052
+                    grasp_altitude_margin = 0.054
                     clearance_lift_z = ref_z + 0.065
                 elif is_stove_task:
                     fly_in_altitude_min = ref_z + 0.065
                     fly_in_altitude_max = ref_z + 0.11
-                    grasp_altitude_margin = 0.052
+                    grasp_altitude_margin = 0.054
                     clearance_lift_z = ref_z + 0.050
                 else:
                     fly_in_altitude_min = ref_z + 0.065
                     fly_in_altitude_max = ref_z + 0.095
-                    grasp_altitude_margin = 0.052
+                    grasp_altitude_margin = 0.054
                     clearance_lift_z = ref_z + 0.038
 
                 if not pure_policy and is_bowl_task:
@@ -999,7 +999,7 @@ def run_closed_loop_evaluation(
                         # Proximity guard: clamp when centered over bowl rim AND fingertips are low enough around rim
                         is_at_obj = (
                             (dist_xy_ee_bowl is not None and dist_xy_ee_bowl <= 5.5 and (ee_z is None or ee_z <= (ref_z + grasp_altitude_margin)))
-                            or (dist_ee_bowl is not None and dist_ee_bowl <= 5.5)
+                            or (dist_ee_bowl is not None and dist_ee_bowl <= 6.2)
                         )
                         if proximity_guard and not is_at_obj:
                             action_np[6] = -1.0
@@ -1039,9 +1039,9 @@ def run_closed_loop_evaluation(
                             # Transport directly to plate center
                             delta_p = plate_pos[:2] - bowl_pos[:2]
                             norm_p = float(np.linalg.norm(delta_p))
-                            if norm_p > 0.058:
+                            if norm_p > 0.038:
                                 unit_p = delta_p / norm_p
-                                cruise_speed = 0.35 if norm_p > 0.14 else 0.24
+                                cruise_speed = 0.35 if norm_p > 0.12 else 0.22
                                 action_np[0] = float(unit_p[0] * cruise_speed)
                                 action_np[1] = float(unit_p[1] * cruise_speed)
 
@@ -1058,16 +1058,16 @@ def run_closed_loop_evaluation(
                                 else:
                                     action_np[2] = 0.0
                             else:
-                                # Over plate basin (< 5.8cm from plate center, squarely within 7.5cm plate radius)
+                                # Over plate central basin (< 3.8cm from plate center, squarely within flat floor)
                                 plate_descent_steps += 1
                                 action_np[0] = float(np.clip(delta_p[0] * 2.0, -0.06, 0.06))
                                 action_np[1] = float(np.clip(delta_p[1] * 2.0, -0.06, 0.06))
-                                action_np[2] = -0.30  # Smooth decisive descent into plate basin
+                                action_np[2] = -0.22  # Smooth decisive descent into plate basin
 
                                 touchdown = (
-                                    (bowl_z is not None and bowl_z <= (plate_z + 0.045))
-                                    or (ee_z is not None and ee_z <= (plate_z + 0.065))
-                                    or plate_descent_steps >= 12
+                                    (bowl_z is not None and bowl_z <= (plate_z + 0.038))
+                                    or (ee_z is not None and ee_z <= (plate_z + 0.058))
+                                    or plate_descent_steps >= 20
                                 )
                                 if touchdown:
                                     action_np[6] = -1.0

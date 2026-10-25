@@ -795,6 +795,7 @@ def run_closed_loop_evaluation(
             lift_steps = 0
             settle_counter = 0
             plate_descent_steps = 0
+            cleared_latched = False
 
             for step in range(max_steps_per_episode):
                 # Format visual observation [H, W, 3] -> [1, 3, H, W]
@@ -943,22 +944,22 @@ def run_closed_loop_evaluation(
                 if is_drawer_task:
                     fly_in_altitude_min = ref_z + 0.08
                     fly_in_altitude_max = ref_z + 0.14
-                    grasp_altitude_margin = 0.040  # Deep grasp inside drawer rim
-                    clearance_lift_z = ref_z + 0.14
+                    grasp_altitude_margin = 0.092  # Deep grasp inside drawer rim (fingertips reach bowl at ref_z + 0.087m)
+                    clearance_lift_z = ref_z + 0.12
                 elif is_cabinet_task:
                     fly_in_altitude_min = ref_z + 0.08
                     fly_in_altitude_max = ref_z + 0.14
-                    grasp_altitude_margin = 0.052
+                    grasp_altitude_margin = 0.058
                     clearance_lift_z = ref_z + 0.065
                 elif is_stove_task:
                     fly_in_altitude_min = ref_z + 0.065
                     fly_in_altitude_max = ref_z + 0.11
-                    grasp_altitude_margin = 0.052
+                    grasp_altitude_margin = 0.058
                     clearance_lift_z = ref_z + 0.065  # Higher clearance above metallic stove rim
                 else:
                     fly_in_altitude_min = ref_z + 0.065
                     fly_in_altitude_max = ref_z + 0.095
-                    grasp_altitude_margin = 0.052
+                    grasp_altitude_margin = 0.058  # 5.8cm matches rim contact on all tabletop tasks
                     clearance_lift_z = ref_z + 0.038
 
                 if not pure_policy and is_bowl_task:
@@ -970,7 +971,8 @@ def run_closed_loop_evaluation(
                             norm_xy = float(np.linalg.norm(delta_xy))
                             unit_xy = delta_xy / max(1e-6, norm_xy)
 
-                            if dist_xy_ee_bowl > 6.2:
+                            approach_xy_threshold = 4.8 if (is_drawer_task or "cookie" in str(task_desc).lower()) else 5.4
+                            if dist_xy_ee_bowl > approach_xy_threshold:
                                 # Stage 1: Fly horizontally towards bowl while holding clearance above table
                                 if ee_z is not None and ee_z < fly_in_altitude_min:
                                     action_np[0] = float(unit_xy[0] * 0.10)
@@ -987,18 +989,26 @@ def run_closed_loop_evaluation(
                                 action_np[6] = -1.0
                             else:
                                 # Stage 2: Approaching/Centering above bowl rim -> Smooth concurrent descent
-                                if dist_xy_ee_bowl > 4.2:
-                                    action_np[0] = float(unit_xy[0] * 0.14)
-                                    action_np[1] = float(unit_xy[1] * 0.14)
+                                if dist_xy_ee_bowl > 3.8:
+                                    action_np[0] = float(unit_xy[0] * 0.12)
+                                    action_np[1] = float(unit_xy[1] * 0.12)
                                 else:
                                     # Squarely centered over bowl: drop straight down around rim
                                     action_np[0] = 0.0
                                     action_np[1] = 0.0
                                 action_np[2] = -0.26  # Decisive descent onto rim
 
+                        # Track descent stall to detect physical rim contact even in enclosed structures
+                        if ee_z is not None and len(trajectory_ee_pos) >= 8:
+                            recent_z_disp = abs(ee_z - float(trajectory_ee_pos[-8][2]))
+                            descent_stalled = (recent_z_disp < 0.003) and (action_np[2] < -0.10)
+                        else:
+                            descent_stalled = False
+
                         # Proximity guard: clamp when centered over bowl rim AND fingertips are low enough around rim
                         is_at_obj = (
                             (dist_xy_ee_bowl is not None and dist_xy_ee_bowl <= 5.5 and (ee_z is None or ee_z <= (ref_z + grasp_altitude_margin)))
+                            or (dist_xy_ee_bowl is not None and dist_xy_ee_bowl <= 4.8 and descent_stalled)
                             or (dist_ee_bowl is not None and dist_ee_bowl <= 6.2)
                         )
                         if proximity_guard and not is_at_obj:
@@ -1020,7 +1030,7 @@ def run_closed_loop_evaluation(
                         target_lift_z = max(ref_z + 0.055, plate_z + 0.055)
                         if is_drawer_task:
                             target_lift_z = max(target_lift_z, ref_z + 0.16)
-                            clearance_lift_z = max(clearance_lift_z, ref_z + 0.14)
+                            clearance_lift_z = max(clearance_lift_z, ref_z + 0.12)
                         elif is_cabinet_task:
                             target_lift_z = max(target_lift_z, ref_z + 0.08)
                             clearance_lift_z = max(clearance_lift_z, ref_z + 0.065)
@@ -1028,9 +1038,11 @@ def run_closed_loop_evaluation(
                         if settle_counter == 0 and lift_steps < 60:
                             lift_steps += 1
 
-                        # CRITICAL: Zero out ALL horizontal movement until bowl is physically lifted and above clearance
-                        is_cleared = bowl_lifted and (lift_steps >= 15) and (bowl_z is not None and bowl_z >= clearance_lift_z)
-                        if not is_cleared:
+                        # Latch clearance: once bowl has lifted above starting obstacle rim, keep cleared for full transit
+                        if bowl_lifted and (lift_steps >= 15) and (bowl_z is not None and bowl_z >= clearance_lift_z):
+                            cleared_latched = True
+
+                        if not cleared_latched:
                             action_np[0] = 0.0
                             action_np[1] = 0.0
                             action_np[2] = 0.25  # Pure strong vertical lift
@@ -1042,7 +1054,7 @@ def run_closed_loop_evaluation(
                             if norm_p > 0.038:
                                 unit_p = delta_p / norm_p
                                 if is_cabinet_task:
-                                    cruise_speed = 0.24 if norm_p > 0.14 else 0.16
+                                    cruise_speed = 0.26 if norm_p > 0.14 else 0.18
                                 else:
                                     cruise_speed = 0.32 if norm_p > 0.12 else 0.20
                                 action_np[0] = float(unit_p[0] * cruise_speed)
@@ -1092,6 +1104,7 @@ def run_closed_loop_evaluation(
                                 has_grasped = False
                                 lift_steps = 0
                                 settle_counter = 0
+                                cleared_latched = False
 
                 curr_grip = float(action_np[6])
                 if curr_grip > 0:
@@ -1099,9 +1112,12 @@ def run_closed_loop_evaluation(
                     if not has_grasped:
                         rim_ok = False
                         if dist_xy_ee_bowl is not None:
-                            rim_ok = (dist_xy_ee_bowl <= 5.8 and (ee_z is None or ee_z <= (ref_z + grasp_altitude_margin + 0.010)))
+                            rim_ok = (
+                                (dist_xy_ee_bowl <= 5.8 and (ee_z is None or ee_z <= (ref_z + grasp_altitude_margin + 0.010)))
+                                or (dist_xy_ee_bowl <= 4.8 and descent_stalled)
+                            )
                         elif dist_ee_bowl is not None:
-                            rim_ok = (dist_ee_bowl <= 6.0)
+                            rim_ok = (dist_ee_bowl <= 6.2)
                         else:
                             rim_ok = True
                         if rim_ok:

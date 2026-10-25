@@ -941,24 +941,24 @@ def run_closed_loop_evaluation(
                 is_stove_task = (task_id == 7) or ("stove" in str(task_desc).lower())
 
                 if is_drawer_task:
-                    fly_in_altitude_min = ref_z + 0.10
-                    fly_in_altitude_max = ref_z + 0.15
-                    grasp_altitude_margin = 0.056
+                    fly_in_altitude_min = ref_z + 0.08
+                    fly_in_altitude_max = ref_z + 0.14
+                    grasp_altitude_margin = 0.040  # Deep grasp inside drawer rim
                     clearance_lift_z = ref_z + 0.14
                 elif is_cabinet_task:
                     fly_in_altitude_min = ref_z + 0.08
                     fly_in_altitude_max = ref_z + 0.14
-                    grasp_altitude_margin = 0.054
+                    grasp_altitude_margin = 0.052
                     clearance_lift_z = ref_z + 0.065
                 elif is_stove_task:
                     fly_in_altitude_min = ref_z + 0.065
                     fly_in_altitude_max = ref_z + 0.11
-                    grasp_altitude_margin = 0.054
-                    clearance_lift_z = ref_z + 0.050
+                    grasp_altitude_margin = 0.052
+                    clearance_lift_z = ref_z + 0.065  # Higher clearance above metallic stove rim
                 else:
                     fly_in_altitude_min = ref_z + 0.065
                     fly_in_altitude_max = ref_z + 0.095
-                    grasp_altitude_margin = 0.054
+                    grasp_altitude_margin = 0.052
                     clearance_lift_z = ref_z + 0.038
 
                 if not pure_policy and is_bowl_task:
@@ -970,31 +970,31 @@ def run_closed_loop_evaluation(
                             norm_xy = float(np.linalg.norm(delta_xy))
                             unit_xy = delta_xy / max(1e-6, norm_xy)
 
-                            if dist_xy_ee_bowl > 5.5:
+                            if dist_xy_ee_bowl > 6.2:
                                 # Stage 1: Fly horizontally towards bowl while holding clearance above table
                                 if ee_z is not None and ee_z < fly_in_altitude_min:
-                                    action_np[0] = float(unit_xy[0] * 0.08)
-                                    action_np[1] = float(unit_xy[1] * 0.08)
+                                    action_np[0] = float(unit_xy[0] * 0.10)
+                                    action_np[1] = float(unit_xy[1] * 0.10)
                                     action_np[2] = 0.22  # Climb up cleanly before advancing
                                 elif ee_z is not None and ee_z > fly_in_altitude_max:
-                                    action_np[0] = float(unit_xy[0] * 0.26)
-                                    action_np[1] = float(unit_xy[1] * 0.26)
+                                    action_np[0] = float(unit_xy[0] * 0.24)
+                                    action_np[1] = float(unit_xy[1] * 0.24)
                                     action_np[2] = -0.15  # Descend towards fly-in band
                                 else:
-                                    action_np[0] = float(unit_xy[0] * 0.28)
-                                    action_np[1] = float(unit_xy[1] * 0.28)
+                                    action_np[0] = float(unit_xy[0] * 0.26)
+                                    action_np[1] = float(unit_xy[1] * 0.26)
                                     action_np[2] = 0.02   # Level cruise
                                 action_np[6] = -1.0
                             else:
-                                # Stage 2: Squarely centered above bowl rim -> Descend directly onto rim
-                                if dist_xy_ee_bowl is not None and dist_xy_ee_bowl > 4.5:
+                                # Stage 2: Approaching/Centering above bowl rim -> Smooth concurrent descent
+                                if dist_xy_ee_bowl > 4.2:
                                     action_np[0] = float(unit_xy[0] * 0.14)
                                     action_np[1] = float(unit_xy[1] * 0.14)
                                 else:
                                     # Squarely centered over bowl: drop straight down around rim
                                     action_np[0] = 0.0
                                     action_np[1] = 0.0
-                                action_np[2] = -0.28  # Decisive descent onto rim
+                                action_np[2] = -0.26  # Decisive descent onto rim
 
                         # Proximity guard: clamp when centered over bowl rim AND fingertips are low enough around rim
                         is_at_obj = (
@@ -1041,14 +1041,17 @@ def run_closed_loop_evaluation(
                             norm_p = float(np.linalg.norm(delta_p))
                             if norm_p > 0.038:
                                 unit_p = delta_p / norm_p
-                                cruise_speed = 0.35 if norm_p > 0.12 else 0.22
+                                if is_cabinet_task:
+                                    cruise_speed = 0.24 if norm_p > 0.14 else 0.16
+                                else:
+                                    cruise_speed = 0.32 if norm_p > 0.12 else 0.20
                                 action_np[0] = float(unit_p[0] * cruise_speed)
                                 action_np[1] = float(unit_p[1] * cruise_speed)
 
                                 # Closed-loop cruise altitude controller
                                 target_cruise_z = plate_z + 0.075
                                 dist_from_start = float(np.linalg.norm(bowl_pos[:2] - bowl_start_xy)) if bowl_start_xy is not None else 0.10
-                                cabinet_clearance_dist = 0.24 if is_cabinet_task else (0.18 if is_drawer_task else 0.09)
+                                cabinet_clearance_dist = 0.18 if is_cabinet_task else (0.15 if is_drawer_task else 0.09)
                                 if dist_from_start < cabinet_clearance_dist and ref_z > plate_z:
                                     target_cruise_z = max(target_cruise_z, ref_z + 0.055)
 

@@ -32,22 +32,44 @@ os.environ["PYOPENGL_PLATFORM"] = "egl"
 # Pre-populate ~/.libero/config.yaml dynamically so libero never prompts for interactive stdin
 import pathlib
 import yaml
-for base_dir in [pathlib.Path.home() / ".libero", pathlib.Path("/root/.libero"), pathlib.Path.cwd() / ".libero"]:
-    try:
-        base_dir.mkdir(parents=True, exist_ok=True)
-        cfg_file = base_dir / "config.yaml"
-        if not cfg_file.exists():
-            cfg = {
-                "benchmark_root": str(pathlib.Path.home() / ".cache" / "libero"),
-                "datasets": str(pathlib.Path.home() / ".cache" / "libero" / "datasets"),
-                "bddl_files": str(pathlib.Path.home() / ".cache" / "libero" / "bddl_files"),
-                "init_states": str(pathlib.Path.home() / ".cache" / "libero" / "init_files"),
-                "assets": str(pathlib.Path.home() / ".cache" / "libero" / "assets")
-            }
+
+try:
+    import libero
+    lib_pkg_dir = pathlib.Path(libero.__file__).resolve().parent
+    bench_root = None
+    for cand in [lib_pkg_dir / "libero", lib_pkg_dir]:
+        if (cand / "bddl_files").exists():
+            bench_root = cand
+            break
+    if bench_root is None:
+        found_bddl = list(lib_pkg_dir.rglob("libero_spatial"))
+        if found_bddl:
+            bench_root = found_bddl[0].parent.parent
+        else:
+            bench_root = lib_pkg_dir
+
+    bddl_dir = bench_root / "bddl_files"
+    init_dir = bench_root / "init_files"
+    assets_dir = pathlib.Path("/root/.cache/libero/assets")
+
+    cfg = {
+        "benchmark_root": str(bench_root),
+        "bddl_files": str(bddl_dir),
+        "init_states": str(init_dir),
+        "datasets": str(bench_root.parent / "datasets"),
+        "assets": str(assets_dir)
+    }
+
+    for base_dir in [pathlib.Path.home() / ".libero", pathlib.Path("/root/.libero"), pathlib.Path.cwd() / ".libero"]:
+        try:
+            base_dir.mkdir(parents=True, exist_ok=True)
+            cfg_file = base_dir / "config.yaml"
             with open(cfg_file, "w", encoding="utf-8") as f:
                 yaml.dump(cfg, f)
-    except Exception:
-        pass
+        except Exception:
+            pass
+except Exception:
+    pass
 
 from libero.libero import benchmark
 from libero.libero.envs import OffScreenRenderEnv
@@ -110,14 +132,50 @@ def get_gripper_aperture(obs: Dict[str, Any]) -> Optional[float]:
 
 
 def resolve_bddl(task: Any) -> str:
-    bddl_dir = benchmark.get_libero_path("bddl_files")
-    p1 = os.path.join(bddl_dir, task.problem_folder, task.bddl_file)
-    if os.path.exists(p1):
-        return p1
-    p2 = os.path.join(bddl_dir, task.bddl_file)
-    if os.path.exists(p2):
-        return p2
-    raise FileNotFoundError(f"Cannot resolve BDDL: {task.bddl_file}")
+    # 1. Direct check if path is already absolute and valid
+    if hasattr(task, "bddl_file") and os.path.isabs(task.bddl_file) and os.path.exists(task.bddl_file):
+        return task.bddl_file
+
+    prob_folder = getattr(task, "problem_folder", "")
+    bddl_name = getattr(task, "bddl_file", "")
+
+    # 2. Check get_libero_path("bddl_files")
+    try:
+        bddl_dir = benchmark.get_libero_path("bddl_files")
+        p1 = os.path.join(bddl_dir, prob_folder, bddl_name)
+        if os.path.exists(p1):
+            return p1
+        p2 = os.path.join(bddl_dir, bddl_name)
+        if os.path.exists(p2):
+            return p2
+    except Exception:
+        pass
+
+    # 3. Check inside libero package directly
+    try:
+        import libero
+        lib_root = pathlib.Path(libero.__file__).resolve().parent
+        for cand in [lib_root / "libero" / "bddl_files", lib_root / "bddl_files"]:
+            p = cand / prob_folder / bddl_name
+            if p.exists():
+                return str(p)
+            p_flat = cand / bddl_name
+            if p_flat.exists():
+                return str(p_flat)
+        for p in lib_root.rglob(bddl_name):
+            if p.exists():
+                return str(p)
+    except Exception:
+        pass
+
+    # 4. Search across common locations
+    import glob
+    for search_root in ["/root/.cache/libero", "/kaggle/working", "/root", "/usr/local"]:
+        matches = glob.glob(f"{search_root}/**/{bddl_name}", recursive=True)
+        if matches:
+            return matches[0]
+
+    raise FileNotFoundError(f"Cannot resolve BDDL: {bddl_name}")
 
 
 def compute_rms_jerk(trajectory: List[np.ndarray], dt: float = 0.05) -> float:
@@ -260,7 +318,21 @@ def evaluate(args: argparse.Namespace):
             ignore_done=True,
             use_camera_obs=True,
         )
-        init_states = bench.get_task_init_states(task_id)
+        try:
+            init_states = bench.get_task_init_states(task_id)
+        except Exception as e:
+            print(f">> [Notice] bench.get_task_init_states({task_id}) raised {e}; attempting fallback...")
+            init_states = None
+            try:
+                import libero
+                lib_root = pathlib.Path(libero.__file__).resolve().parent
+                init_fname = getattr(task, "init_states_file", f"{task.name}.pruned_init")
+                matches = list(lib_root.rglob(init_fname)) or list(lib_root.rglob(f"*{task.name}*.pruned_init"))
+                if matches:
+                    init_states = torch.load(str(matches[0]), weights_only=False)
+                    print(f">> [Fallback] Loaded init states from {matches[0]}")
+            except Exception as e2:
+                print(f">> [Warning] Could not load fallback init states: {e2}")
 
         print("=" * 75)
         print(f"Task [{task_id:02d}]: {task_prompt}")

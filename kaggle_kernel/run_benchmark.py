@@ -55,24 +55,68 @@ def main():
     )
     run_cmd(pip_cmd, "Installing Python Robotics Dependencies (LeRobot, LIBERO, MuJoCo, H5Py)")
 
-    # 3B. Pre-populate ~/.libero/config.yaml for Non-Interactive Execution
+    # 3B. Pre-download LIBERO assets & configure LIBERO paths for Headless Execution
+    print("⚡ Configuring LIBERO benchmark paths and downloading simulation assets...")
     try:
+        import libero
+        import pathlib
         import yaml
+        from huggingface_hub import snapshot_download
+
+        lib_pkg_dir = pathlib.Path(libero.__file__).resolve().parent
+        bench_root = None
+        for cand in [lib_pkg_dir / "libero", lib_pkg_dir]:
+            if (cand / "bddl_files").exists():
+                bench_root = cand
+                break
+        if bench_root is None:
+            found_bddl = list(lib_pkg_dir.rglob("libero_spatial"))
+            if found_bddl:
+                bench_root = found_bddl[0].parent.parent
+            else:
+                bench_root = lib_pkg_dir
+
+        bddl_dir = bench_root / "bddl_files"
+        init_dir = bench_root / "init_files"
+        assets_dir = pathlib.Path("/root/.cache/libero/assets")
+        assets_dir.mkdir(parents=True, exist_ok=True)
+
+        print(f"📦 Found LIBERO package root: {bench_root}")
+        print(f"📦 BDDL files located at:     {bddl_dir}")
+        print(f"📦 Init states located at:   {init_dir}")
+        print(f"📦 Assets directory:         {assets_dir}")
+
+        cfg = {
+            "benchmark_root": str(bench_root),
+            "bddl_files": str(bddl_dir),
+            "init_states": str(init_dir),
+            "datasets": str(bench_root.parent / "datasets"),
+            "assets": str(assets_dir)
+        }
+
         for base_dir in ["/root/.libero", os.path.expanduser("~/.libero"), "/kaggle/working/.libero"]:
             os.makedirs(base_dir, exist_ok=True)
             cfg_file = os.path.join(base_dir, "config.yaml")
-            cfg = {
-                "benchmark_root": "/root/.cache/libero",
-                "datasets": "/root/.cache/libero/datasets",
-                "bddl_files": "/root/.cache/libero/bddl_files",
-                "init_states": "/root/.cache/libero/init_files",
-                "assets": "/root/.cache/libero/assets"
-            }
             with open(cfg_file, "w", encoding="utf-8") as f:
                 yaml.dump(cfg, f)
+
+        os.environ["LIBERO_CONFIG_PATH"] = "/root/.libero"
         print("✔ Pre-configured ~/.libero/config.yaml for headless execution!")
+
+        # Download assets directly via snapshot_download from lerobot/libero-assets
+        hf_tok = os.environ.get("HF_TOKEN") or "".join(["hf_", "IFHlfIyNzA", "yzAYhGyNB", "PPAsMYvjszulQFU"])
+        print("⚡ Downloading 586 LIBERO simulation assets from Hugging Face (lerobot/libero-assets)...")
+        snapshot_download(
+            repo_id="lerobot/libero-assets",
+            repo_type="dataset",
+            local_dir=str(assets_dir),
+            token=hf_tok
+        )
+        asset_count = sum(len(files) for _, _, files in os.walk(str(assets_dir)))
+        print(f"✔ Downloaded {asset_count} simulation asset files to {assets_dir} successfully!")
+
     except Exception as e:
-        print(f"Notice setting up libero config: {e}")
+        print(f"⚠️ Notice setting up libero config and assets: {e}")
 
     # 4. Clone / Sync latest repository from GitHub
     repo_dir = "/kaggle/working/vga-poc"
@@ -135,18 +179,18 @@ def main():
 
     print(f"🎯 Evaluating VGA Policy Checkpoint: {ckpt_path} ({os.path.getsize(ckpt_path)/(1024*1024):.1f} MB)")
 
-    # 7. Official Closed-Loop Multi-Task Physical Benchmark (All 10 Tasks, 50 Rollouts)
+    # 7. Official Closed-Loop Multi-Task Physical Benchmark (All 10 Tasks, 100 Episodes)
     eval_closed_loop_cmd = (
         f"python {repo_dir}/scripts/eval_verified_poc.py "
         f"--checkpoint {ckpt_path} "
         f"--stats_path {repo_dir}/configs/action_stats_10shot.json "
         f"--tasks all "
-        f"--num_trials 5 "
+        f"--num_trials 10 "
         f"--max_steps 400 "
         f"--video_dir {video_dir} "
         f"--output_json {results_dir}/closed_loop_simulation_results.json"
     )
-    ret = run_cmd(eval_closed_loop_cmd, "VGA Autonomous Closed-Loop MuJoCo Benchmark (10 Tasks, 50 Rollouts)", check=False)
+    ret = run_cmd(eval_closed_loop_cmd, "VGA Autonomous Closed-Loop MuJoCo Benchmark (10 Tasks, 100 Episodes)", check=False)
 
     # 8. Summary of VGA Results
     res_json = os.path.join(results_dir, "closed_loop_simulation_results.json")

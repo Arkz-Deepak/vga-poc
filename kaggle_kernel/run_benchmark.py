@@ -179,10 +179,27 @@ def main():
 
     print(f"🎯 Evaluating VGA Policy Checkpoint: {ckpt_path} ({os.path.getsize(ckpt_path)/(1024*1024):.1f} MB)")
 
+    # Resolve Version 17 checkpoint for Decoupled WiSE-FT Weight-Space Ensemble
+    import glob
+    soup_ckpt = None
+    v17_cands = (
+        glob.glob("/kaggle/input/**/vga_libero_policy.pt", recursive=True) +
+        glob.glob("/kaggle/working/**/vga_libero_policy.pt", recursive=True) +
+        glob.glob(f"{repo_dir}/checkpoints/vga_libero_policy.pt")
+    )
+    for c in v17_cands:
+        if os.path.exists(c) and os.path.getsize(c) > 300_000_000:
+            soup_ckpt = c
+            print(f"⚡ Found Version 17 checkpoint for WiSE-FT ensemble: {soup_ckpt} ({os.path.getsize(soup_ckpt)/(1024*1024):.1f} MB)!")
+            break
+
+    soup_arg = f"--soup_checkpoint {soup_ckpt} --soup_alpha 0.55 " if soup_ckpt else ""
+
     # 7. Official Closed-Loop Multi-Task Physical Benchmark (All 10 Tasks, 100 Episodes)
     eval_closed_loop_cmd = (
         f"python {repo_dir}/scripts/eval_verified_poc.py "
         f"--checkpoint {ckpt_path} "
+        f"{soup_arg}"
         f"--stats_path {repo_dir}/configs/action_stats_10shot.json "
         f"--tasks all "
         f"--num_trials 10 "

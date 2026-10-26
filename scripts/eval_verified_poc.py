@@ -273,12 +273,12 @@ def evaluate(args: argparse.Namespace):
                 if ("fine_coord" in k or "eef_pos_cond" in k) and float(soup_sd[k].norm().item()) < 1e-5:
                     continue
                 if "gripper_head" in k or "eef_pos_encoder" in k:
-                    # Anchor BCE gripper head to v11 to prevent synthetic-tail mid-air drops
-                    state_dict[k] = soup_sd[k].float()
+                    # Anchor BCE gripper head to primary (v11) to prevent synthetic-tail mid-air drops
+                    state_dict[k] = v.float()
                 else:
                     state_dict[k] = alpha * v.float() + (1.0 - alpha) * soup_sd[k].float()
                 blended_count += 1
-        print(f">> [WiSE-FT] Blended {blended_count} tensors (alpha={alpha:.2f}, anchored gripper_head to {args.soup_checkpoint}).")
+        print(f">> [WiSE-FT] Blended {blended_count} tensors (alpha={alpha:.2f}, primary={args.checkpoint}, anchored gripper_head to v11).")
 
     model.load_state_dict(state_dict, strict=False)
     model.eval()
@@ -566,12 +566,12 @@ def evaluate(args: argparse.Namespace):
                                 else:
                                     action[2] = max(float(action[2]), 0.0)
 
-                            # Surgical Ramekin Rim Un-Wedge ONLY if physically stalled for 16+ steps
+                            # Surgical Ramekin / Obstacle Rim Un-Wedge if physically stalled for 14+ steps
                             if (
-                                16 <= closed_steps <= 36
+                                14 <= closed_steps <= 36
                                 and dist_from_grasp < 0.055
-                                and 0.940 <= cur_z <= 0.962
-                                and (grasp_peak_z - cur_z) < 0.012
+                                and 0.940 <= cur_z <= 1.025
+                                and (grasp_peak_z - cur_z) < 0.015
                                 and len(eef_trajectory) >= 10
                                 and float(np.linalg.norm(cur_eef_pos - eef_trajectory[-10])) < 0.008
                                 and finger_aperture is not None
@@ -631,11 +631,16 @@ def evaluate(args: argparse.Namespace):
                                 place_settle_steps = 0
 
                             empty_air_pinch = (
-                                (closed_steps >= 10 and finger_aperture is not None and finger_aperture <= 0.0010 and (cur_z < 0.965 or raw_grip_val < 0.20))
-                                or (closed_steps >= 12 and finger_aperture is not None and finger_aperture <= 0.0022 and raw_grip_val < -0.20)
+                                # 1. Closed empty fingers (<= 1.6mm aperture) anywhere in workspace: bowl rim is never this thin
+                                (closed_steps >= 10 and finger_aperture is not None and finger_aperture <= 0.0016)
+                                # 2. Partial pinch (<= 2.6mm) where policy is letting go or hasn't departed
+                                or (closed_steps >= 12 and finger_aperture is not None and finger_aperture <= 0.0026 and (raw_grip_val < 0.10 or dist_from_grasp < 0.050))
+                                # 3. Premature slip / wide drop
                                 or (closed_steps >= 16 and finger_aperture is not None and finger_aperture >= 0.075)
-                                or (closed_steps >= 75 and dist_from_grasp < 0.035 and cur_z < 0.948 and (grasp_peak_z - cur_z) < 0.020)
-                                or (closed_steps >= 36 and dist_from_grasp < 0.085 and neg_grip_streak >= 12 and cur_z < 0.958)
+                                # 4. Long stall without lift or transit (stuck on table or obstacle)
+                                or (closed_steps >= 55 and dist_from_grasp < 0.040 and (grasp_peak_z - cur_z) < 0.020)
+                                # 5. Negative grip streak without departure
+                                or (closed_steps >= 32 and dist_from_grasp < 0.085 and neg_grip_streak >= 12)
                             )
 
                             target_placement_release = at_tabletop_placement_plane and (

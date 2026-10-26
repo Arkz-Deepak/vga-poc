@@ -55,6 +55,25 @@ def main():
     )
     run_cmd(pip_cmd, "Installing Python Robotics Dependencies (LeRobot, LIBERO, MuJoCo, H5Py)")
 
+    # 3B. Pre-populate ~/.libero/config.yaml for Non-Interactive Execution
+    try:
+        import yaml
+        for base_dir in ["/root/.libero", os.path.expanduser("~/.libero"), "/kaggle/working/.libero"]:
+            os.makedirs(base_dir, exist_ok=True)
+            cfg_file = os.path.join(base_dir, "config.yaml")
+            cfg = {
+                "benchmark_root": "/root/.cache/libero",
+                "datasets": "/root/.cache/libero/datasets",
+                "bddl_files": "/root/.cache/libero/bddl_files",
+                "init_states": "/root/.cache/libero/init_files",
+                "assets": "/root/.cache/libero/assets"
+            }
+            with open(cfg_file, "w", encoding="utf-8") as f:
+                yaml.dump(cfg, f)
+        print("✔ Pre-configured ~/.libero/config.yaml for headless execution!")
+    except Exception as e:
+        print(f"Notice setting up libero config: {e}")
+
     # 4. Clone / Sync latest repository from GitHub
     repo_dir = "/kaggle/working/vga-poc"
     if not os.path.exists(repo_dir):

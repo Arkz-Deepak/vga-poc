@@ -29,6 +29,26 @@ from typing import Any, Dict, List, Optional
 os.environ["MUJOCO_GL"] = "egl"
 os.environ["PYOPENGL_PLATFORM"] = "egl"
 
+# Pre-populate ~/.libero/config.yaml dynamically so libero never prompts for interactive stdin
+import pathlib
+import yaml
+for base_dir in [pathlib.Path.home() / ".libero", pathlib.Path("/root/.libero"), pathlib.Path.cwd() / ".libero"]:
+    try:
+        base_dir.mkdir(parents=True, exist_ok=True)
+        cfg_file = base_dir / "config.yaml"
+        if not cfg_file.exists():
+            cfg = {
+                "benchmark_root": str(pathlib.Path.home() / ".cache" / "libero"),
+                "datasets": str(pathlib.Path.home() / ".cache" / "libero" / "datasets"),
+                "bddl_files": str(pathlib.Path.home() / ".cache" / "libero" / "bddl_files"),
+                "init_states": str(pathlib.Path.home() / ".cache" / "libero" / "init_files"),
+                "assets": str(pathlib.Path.home() / ".cache" / "libero" / "assets")
+            }
+            with open(cfg_file, "w", encoding="utf-8") as f:
+                yaml.dump(cfg, f)
+    except Exception:
+        pass
+
 from libero.libero import benchmark
 from libero.libero.envs import OffScreenRenderEnv
 import numpy as np

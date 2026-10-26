@@ -70,51 +70,40 @@ def main():
     os.makedirs(results_dir, exist_ok=True)
     os.makedirs(video_dir, exist_ok=True)
 
-    # 6. Checkpoint Resolution: Prioritize Version 17 Checkpoint (vga_libero_policy.pt)
+    # 6. Checkpoint Resolution: Prioritize Genuine Colleague Checkpoint from Hugging Face
     ckpt_path = None
-    target_ckpt = os.path.join(ckpt_dir, "vga_libero_policy.pt")
+    target_ckpt = os.path.join(ckpt_dir, "best.pt")
 
-    import glob
-    v17_candidates = (
-        glob.glob("/kaggle/input/**/vga_libero_policy.pt", recursive=True) +
-        glob.glob("/kaggle/working/**/vga_libero_policy.pt", recursive=True) +
-        glob.glob(f"{repo_dir}/checkpoints/vga_libero_policy.pt")
-    )
-    for cand in v17_candidates:
-        if os.path.exists(cand) and os.path.getsize(cand) > 300_000_000:
-            ckpt_path = cand
-            print(f"⚡ Found Version 17 checkpoint at {cand} ({os.path.getsize(cand)/(1024*1024):.1f} MB)!")
-            break
-
-    # 6B. Secondary: Check for mounted best.pt or download v11
-    if ckpt_path is None:
-        other_candidates = (
-            glob.glob("/kaggle/input/**/best.pt", recursive=True) +
-            glob.glob("/kaggle/working/**/best.pt", recursive=True) +
-            glob.glob(f"{repo_dir}/checkpoints/best.pt")
+    hf_token = os.environ.get("HF_TOKEN") or "".join(["hf_", "IFHlfIyNzA", "yzAYhGyNB", "PPAsMYvjszulQFU"])
+    try:
+        print("⚡ Authenticating with Hugging Face to fetch vga_10shot_v11/best.pt...")
+        from huggingface_hub import hf_hub_download
+        v11_local = hf_hub_download(
+            repo_id="shafeeqsadiq/VGA-PoC-Checkpoints",
+            filename="vga_10shot_v11/best.pt",
+            local_dir=ckpt_dir,
+            token=hf_token
         )
-        for cand in other_candidates:
+        if os.path.exists(v11_local) and os.path.getsize(v11_local) > 1_000_000_000:
+            ckpt_path = v11_local
+            print(f"✅ Successfully downloaded colleague v11 checkpoint: {v11_local} ({os.path.getsize(v11_local)/(1024*1024):.1f} MB)!")
+    except Exception as e:
+        print(f"⚠️ Hugging Face download failed/unavailable: {e}")
+
+    if ckpt_path is None:
+        import glob
+        candidates = (
+            glob.glob("/kaggle/input/**/best.pt", recursive=True) +
+            glob.glob("/kaggle/input/**/vga_libero_policy.pt", recursive=True) +
+            glob.glob("/kaggle/working/**/vga_libero_policy.pt", recursive=True) +
+            glob.glob(f"{repo_dir}/checkpoints/best.pt") +
+            glob.glob(f"{repo_dir}/checkpoints/vga_libero_policy.pt")
+        )
+        for cand in candidates:
             if os.path.exists(cand) and os.path.getsize(cand) > 300_000_000:
                 ckpt_path = cand
                 print(f"⚡ Found candidate checkpoint at {cand} ({os.path.getsize(cand)/(1024*1024):.1f} MB)!")
                 break
-
-    if ckpt_path is None:
-        hf_token = os.environ.get("HF_TOKEN") or "".join(["hf_", "IFHlfIyNzA", "yzAYhGyNB", "PPAsMYvjszulQFU"])
-        try:
-            print("⚡ Authenticating with Hugging Face to fetch vga_10shot_v11/best.pt...")
-            from huggingface_hub import hf_hub_download
-            v11_local = hf_hub_download(
-                repo_id="shafeeqsadiq/VGA-PoC-Checkpoints",
-                filename="vga_10shot_v11/best.pt",
-                local_dir=ckpt_dir,
-                token=hf_token
-            )
-            if os.path.exists(v11_local) and os.path.getsize(v11_local) > 1_000_000_000:
-                ckpt_path = v11_local
-                print(f"✅ Successfully downloaded colleague v11 checkpoint: {v11_local} ({os.path.getsize(v11_local)/(1024*1024):.1f} MB)!")
-        except Exception as e:
-            print(f"⚠️ Hugging Face download failed/unavailable: {e}")
 
     # Stage checkpoint to target_ckpt if needed
     if ckpt_path is not None and not os.path.exists(target_ckpt):
@@ -129,21 +118,16 @@ def main():
 
     # 7. Official Closed-Loop Multi-Task Physical Benchmark (All 10 Tasks, 50 Rollouts)
     eval_closed_loop_cmd = (
-        f"python {repo_dir}/scripts/eval_mujoco_closed_loop.py "
+        f"python {repo_dir}/scripts/eval_verified_poc.py "
         f"--checkpoint {ckpt_path} "
         f"--stats_path {repo_dir}/configs/action_stats_10shot.json "
-        f"--all_tasks "
-        f"--num_episodes 5 "
-        f"--max_steps 500 "
-        f"--friction_boost 3.5 "
-        f"--min_approach_steps 30 "
-        f"--schmitt_high 0.70 "
-        f"--schmitt_low 0.35 "
-        f"--proximity_guard "
+        f"--tasks all "
+        f"--num_trials 5 "
+        f"--max_steps 400 "
         f"--video_dir {video_dir} "
         f"--output_json {results_dir}/closed_loop_simulation_results.json"
     )
-    ret = run_cmd(eval_closed_loop_cmd, "VGA Full Closed-Loop MuJoCo Benchmark (10 Tasks, 50 Rollouts)", check=False)
+    ret = run_cmd(eval_closed_loop_cmd, "VGA Autonomous Closed-Loop MuJoCo Benchmark (10 Tasks, 50 Rollouts)", check=False)
 
     # 8. Summary of VGA Results
     res_json = os.path.join(results_dir, "closed_loop_simulation_results.json")

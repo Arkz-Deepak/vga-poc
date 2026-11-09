@@ -578,6 +578,7 @@ class VGAPolicy(nn.Module):
         t_base_wrist: Optional[Union[torch.Tensor, np.ndarray]] = None,
         wrist_intrinsics: Optional[Union[torch.Tensor, np.ndarray]] = None,
         prompt: Optional[Union[str, List[str], torch.Tensor]] = None,
+        geom_feat: Optional[torch.Tensor] = None,
         return_gripper_logits: bool = False,
         depth_front_override: Optional[torch.Tensor] = None,
         depth_wrist_override: Optional[torch.Tensor] = None
@@ -609,6 +610,7 @@ class VGAPolicy(nn.Module):
             l_pool=self.last_l_pool,
             eef_z=eef_z,
             eef_pos=eef_pos,
+            geom_feat=geom_feat,
             return_gripper_logits=True
         )
         self.last_gripper_logits = gripper_logits
@@ -635,7 +637,8 @@ class VGAPolicy(nn.Module):
         rgb_wrist: Optional[Union[torch.Tensor, np.ndarray]] = None,
         t_base_wrist: Optional[Union[torch.Tensor, np.ndarray]] = None,
         wrist_intrinsics: Optional[Union[torch.Tensor, np.ndarray]] = None,
-        prompt: Optional[Union[str, List[str], torch.Tensor]] = None
+        prompt: Optional[Union[str, List[str], torch.Tensor]] = None,
+        geom_feat: Optional[Union[torch.Tensor, np.ndarray]] = None
     ) -> torch.Tensor:
 
         context, _ = self.extract_multimodal_context(
@@ -653,13 +656,19 @@ class VGAPolicy(nn.Module):
         eef_z = self._extract_eef_z(t_base_wrist, B, context.device, context.dtype)
         eef_pos = self._extract_eef_pos(t_base_wrist, B, context.device, context.dtype)
 
+        if geom_feat is not None and isinstance(geom_feat, np.ndarray):
+            geom_feat = torch.from_numpy(geom_feat).to(device=context.device, dtype=context.dtype)
+            if geom_feat.ndim == 1:
+                geom_feat = geom_feat.unsqueeze(0)
+
         return self.dit.sample_euler(
             context=context,
             a_prev=a_prev,
             gripper_state=gripper_state,
             l_pool=self.last_l_pool,
             eef_z=eef_z,
-            eef_pos=eef_pos
+            eef_pos=eef_pos,
+            geom_feat=geom_feat
         )
 
     @property

@@ -36,6 +36,34 @@ class SinusoidalPosEmb(nn.Module):
         return emb
 
 
+class GModulationAdapter(nn.Module):
+    """
+    VGA Geometric Spatial Modulation (G-Modulation) Layer.
+    Directly modulates DiT AdaLN neuron activations based on relative 3D geometric displacements:
+      - delta_p_target: (p_target - p_eef) 3D displacement vector to target object
+      - delta_p_goal: (p_goal - p_eef) 3D displacement vector to goal receptacle
+      - p_eef: Current end-effector 3D position
+    """
+    def __init__(self, hidden_dim: int = 512, in_dim: int = 9):
+        super().__init__()
+        self.in_dim = in_dim
+        self.hidden_dim = hidden_dim
+        self.mlp = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim // 2),
+            nn.SiLU(),
+            nn.Linear(hidden_dim // 2, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
+        nn.init.zeros_(self.mlp[-1].weight)
+        nn.init.zeros_(self.mlp[-1].bias)
+        self.scale_gate = nn.Parameter(torch.ones(1) * 0.1)
+
+    def forward(self, geom_feat: torch.Tensor) -> torch.Tensor:
+        # geom_feat: [B, in_dim]
+        return self.scale_gate * self.mlp(geom_feat)
+
+
 class DiTBlock(nn.Module):
     def __init__(self, hidden_dim: int, num_heads: int):
         super().__init__()
@@ -157,6 +185,9 @@ class DiTActionExpert(nn.Module):
         nn.init.zeros_(self.eef_pos_cond[-1].weight)
         nn.init.zeros_(self.eef_pos_cond[-1].bias)
 
+        # G-Modulation Layer: Geometric Spatial Neuron Activation Modulation
+        self.geom_modulation = GModulationAdapter(hidden_dim=hidden_dim, in_dim=9)
+
         self.context_proj = nn.Linear(context_dim, hidden_dim)
 
         self.blocks = nn.ModuleList([
@@ -188,6 +219,7 @@ class DiTActionExpert(nn.Module):
         l_pool: Optional[torch.Tensor] = None,
         eef_z: Optional[torch.Tensor] = None,
         eef_pos: Optional[torch.Tensor] = None,
+        geom_feat: Optional[torch.Tensor] = None,
         return_gripper_logits: bool = False
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         B = x_t.shape[0]
@@ -262,6 +294,8 @@ class DiTActionExpert(nn.Module):
             + self.eef_z_encoder(eef_z)
             + self.eef_pos_cond(eef_pos_gated)
         )
+        if geom_feat is not None:
+            c = c + self.geom_modulation(geom_feat.to(device=device, dtype=dtype))
         if l_pool is not None:
             c = c + self.lang_encoder(l_pool.to(device=device, dtype=dtype))
 
@@ -299,6 +333,7 @@ class DiTActionExpert(nn.Module):
         l_pool: Optional[torch.Tensor] = None,
         eef_z: Optional[torch.Tensor] = None,
         eef_pos: Optional[torch.Tensor] = None,
+        geom_feat: Optional[torch.Tensor] = None,
         steps: int = 10
     ) -> torch.Tensor:
         B = context.shape[0]
@@ -325,6 +360,7 @@ class DiTActionExpert(nn.Module):
                 l_pool=l_pool,
                 eef_z=eef_z,
                 eef_pos=eef_pos,
+                geom_feat=geom_feat,
                 return_gripper_logits=True
             )
             x_tau = x_tau + v_pred.float() * dt

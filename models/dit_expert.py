@@ -244,12 +244,14 @@ class DiTActionExpert(nn.Module):
 
         if not self.training:
             # In-distribution support hull clamping for the post-grasp target placement quadrant:
-            # Prevents OOD MLP extrapolation when the arm slightly overshoots the plate center.
-            in_place_quadrant = (is_grasped.squeeze(-1) > 0.5) & (eef_pos_cond_in[:, 0] > 0.035) & (eef_pos_cond_in[:, 1] > 0.175)
-            if in_place_quadrant.any():
-                eef_pos_cond_in[in_place_quadrant, 0] = eef_pos_cond_in[in_place_quadrant, 0].clamp(max=0.082)
-                eef_pos_cond_in[in_place_quadrant, 1] = eef_pos_cond_in[in_place_quadrant, 1].clamp(max=0.228)
-                eef_pos_cond_in[in_place_quadrant, 2] = eef_pos_cond_in[in_place_quadrant, 2].clamp(max=0.060)
+            # Only apply for low-table tabletop setups (e.g., LIBERO where Z < 0.20m).
+            # Strictly avoided in elevated kitchen workspaces (RoboCasa / RoboSuite where Z >= 0.80m).
+            if eef_pos_cond_in[:, 2].mean() < 0.20:
+                in_place_quadrant = (is_grasped.squeeze(-1) > 0.5) & (eef_pos_cond_in[:, 0] > 0.035) & (eef_pos_cond_in[:, 1] > 0.175)
+                if in_place_quadrant.any():
+                    eef_pos_cond_in[in_place_quadrant, 0] = eef_pos_cond_in[in_place_quadrant, 0].clamp(max=0.082)
+                    eef_pos_cond_in[in_place_quadrant, 1] = eef_pos_cond_in[in_place_quadrant, 1].clamp(max=0.228)
+                    eef_pos_cond_in[in_place_quadrant, 2] = eef_pos_cond_in[in_place_quadrant, 2].clamp(max=0.060)
 
         eef_pos_gated = torch.cat([eef_pos_cond_in[:, :2] * is_grasped, eef_pos_cond_in[:, 2:3]], dim=-1)
 

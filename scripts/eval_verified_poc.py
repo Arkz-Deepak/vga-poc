@@ -212,6 +212,44 @@ def _extract_intrinsics(obs: Dict[str, Any], key: str, default_config: Dict[str,
     return K
 
 
+def extract_libero_geometric_features(env: Any, obs: Dict[str, Any], task_prompt: str) -> Optional[np.ndarray]:
+    """
+    Extracts 3D continuous relative geometric displacements for G-Modulation:
+    [p_target - p_eef, p_goal - p_eef, p_eef] (9-dim).
+    Grounds elevated tasks (cabinet, stove, ramekin) to eliminate 2D spatial smearing.
+    """
+    try:
+        eef_pos = obs.get("robot0_eef_pos", np.zeros(3)).copy()
+        sim = getattr(env, "env", env)
+        sim = getattr(sim, "sim", None)
+        if sim is None:
+            return None
+
+        target_pos = None
+        goal_pos = None
+        prompt_lower = task_prompt.lower()
+
+        for i in range(sim.model.nbody):
+            bname = sim.model.body_id2name(i)
+            if not bname:
+                continue
+            bname_low = bname.lower()
+            if any(k in prompt_lower and k in bname_low for k in ["bowl", "butter", "ramekin", "mug", "book"]):
+                target_pos = sim.data.body_xpos[i].copy()
+            if any(k in prompt_lower and k in bname_low for k in ["plate", "tray", "cabinet", "drawer", "stove", "box"]):
+                goal_pos = sim.data.body_xpos[i].copy()
+
+        if target_pos is None:
+            target_pos = eef_pos.copy()
+        if goal_pos is None:
+            goal_pos = target_pos.copy()
+
+        geom_feat = np.concatenate([target_pos - eef_pos, goal_pos - eef_pos, eef_pos]).astype(np.float32)
+        return geom_feat
+    except Exception:
+        return None
+
+
 def evaluate(args: argparse.Namespace):
     args.checkpoint = sanitize_container_path(args.checkpoint)
     args.soup_checkpoint = sanitize_container_path(args.soup_checkpoint)
@@ -417,6 +455,8 @@ def evaluate(args: argparse.Namespace):
                     r_rel = compute_relative_wrist_rotmat(obs["robot0_eef_quat"], init_eef_quat)
                     t_wrist_mat[0, :3, :3] = torch.from_numpy(r_rel).to(device=device, dtype=torch.float32)
 
+                geom_feat = extract_libero_geometric_features(env, obs, task_prompt)
+
                 with torch.no_grad():
                     with torch.amp.autocast(device_type="cuda" if device.type == "cuda" else "cpu", dtype=torch.bfloat16):
                         pred_chunk = model.sample_actions(
@@ -427,7 +467,8 @@ def evaluate(args: argparse.Namespace):
                             rgb_wrist=rgb_wrist,
                             t_base_wrist=t_wrist_mat,
                             wrist_intrinsics=wrist_intrinsics,
-                            prompt=[task_prompt]
+                            prompt=[task_prompt],
+                            geom_feat=geom_feat
                         )
 
                     if isinstance(pred_chunk, tuple):
@@ -532,7 +573,11 @@ def evaluate(args: argparse.Namespace):
                                 and float(np.linalg.norm(cur_eef_pos[:2] - release_origin_pos[:2])) < 0.095
                             )
 
-                            diving_in_free_air = (action[2] < -0.78 and 0.955 < cur_z < 1.050)
+                            diving_in_free_air = (
+                                action[2] < -0.78
+                                and 0.955 < cur_z < 1.050
+                                and (geom_feat is None or float(np.linalg.norm(geom_feat[:2])) > 0.045)
+                            )
 
                             if not near_recent_release and raw_grip_val > 0.0 and not diving_in_free_air:
                                 gripper_closed = True

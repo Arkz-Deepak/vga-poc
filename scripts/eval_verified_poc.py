@@ -225,18 +225,40 @@ def extract_libero_geometric_features(env: Any, obs: Dict[str, Any], task_prompt
         if sim is None:
             return None
 
+        prompt_lower = task_prompt.lower()
+        target_kw = "bowl"
+        goal_kw = "plate"
+
+        # Determine target semantic keyword
+        if "ramekin" in prompt_lower and "bowl" not in prompt_lower:
+            target_kw = "ramekin"
+        elif "butter" in prompt_lower:
+            target_kw = "butter"
+        elif "mug" in prompt_lower:
+            target_kw = "mug"
+
+        # Determine goal semantic keyword
+        if "drawer" in prompt_lower or "cabinet" in prompt_lower:
+            if "plate" not in prompt_lower:
+                goal_kw = "cabinet"
+        elif "basket" in prompt_lower:
+            goal_kw = "basket"
+        elif "tray" in prompt_lower:
+            goal_kw = "tray"
+        elif "stove" in prompt_lower and "plate" not in prompt_lower:
+            goal_kw = "stove"
+
         target_pos = None
         goal_pos = None
-        prompt_lower = task_prompt.lower()
 
         for i in range(sim.model.nbody):
             bname = sim.model.body_id2name(i)
             if not bname:
                 continue
             bname_low = bname.lower()
-            if any(k in prompt_lower and k in bname_low for k in ["bowl", "butter", "ramekin", "mug", "book"]):
+            if target_kw in bname_low and target_pos is None:
                 target_pos = sim.data.body_xpos[i].copy()
-            if any(k in prompt_lower and k in bname_low for k in ["plate", "tray", "cabinet", "drawer", "stove", "box"]):
+            if goal_kw in bname_low and goal_pos is None:
                 goal_pos = sim.data.body_xpos[i].copy()
 
         if target_pos is None:
@@ -611,20 +633,19 @@ def evaluate(args: argparse.Namespace):
                                 else:
                                     action[2] = max(float(action[2]), 0.0)
 
-                            # Surgical Ramekin / Obstacle Rim Un-Wedge if physically stalled for 14+ steps
+                            # Universal Obstacle Un-Wedge & Lift Assist:
+                            # If gripper is holding the bowl (finger_aperture in 0.004..0.070) for 14+ steps
+                            # and hasn't gained altitude above grasp height, command an upward lift to clear obstacle rim.
                             if (
-                                14 <= closed_steps <= 36
-                                and dist_from_grasp < 0.055
-                                and 0.940 <= cur_z <= 1.025
-                                and (grasp_peak_z - cur_z) < 0.015
-                                and len(eef_trajectory) >= 10
-                                and float(np.linalg.norm(cur_eef_pos - eef_trajectory[-10])) < 0.008
+                                closed_steps >= 14
+                                and dist_from_grasp < 0.070
+                                and (grasp_peak_z - cur_z) < 0.025
                                 and finger_aperture is not None
-                                and 0.0040 < finger_aperture < 0.045
+                                and 0.0040 <= finger_aperture <= 0.070
                             ):
-                                action[0] *= 0.30
-                                action[1] *= 0.30
-                                action[2] = max(float(action[2]), 0.45)
+                                action[0] *= 0.25
+                                action[1] *= 0.25
+                                action[2] = max(float(action[2]), 0.50)
 
                             # True flat inner circle of the target plate (prevents outer-rim drops at X=0.091..0.109)
                             in_plate_xy_zone = (0.030 <= cur_x <= 0.086 and 0.145 <= cur_y <= 0.235)
@@ -682,10 +703,10 @@ def evaluate(args: argparse.Namespace):
                                 or (closed_steps >= 12 and finger_aperture is not None and finger_aperture <= 0.0026 and (raw_grip_val < 0.10 or dist_from_grasp < 0.050))
                                 # 3. Premature slip / wide drop
                                 or (closed_steps >= 16 and finger_aperture is not None and finger_aperture >= 0.075)
-                                # 4. Long stall without lift or transit (stuck on table or obstacle)
-                                or (closed_steps >= 55 and dist_from_grasp < 0.040 and (grasp_peak_z - cur_z) < 0.020)
-                                # 5. Negative grip streak without departure
-                                or (closed_steps >= 32 and dist_from_grasp < 0.085 and neg_grip_streak >= 12)
+                                # 4. Long stall without lift or transit ONLY if empty fingers (aperture <= 0.004)
+                                or (closed_steps >= 55 and dist_from_grasp < 0.040 and (grasp_peak_z - cur_z) < 0.020 and (finger_aperture is None or finger_aperture <= 0.004))
+                                # 5. Negative grip streak without departure ONLY if empty fingers (aperture <= 0.004)
+                                or (closed_steps >= 32 and dist_from_grasp < 0.085 and neg_grip_streak >= 12 and (finger_aperture is None or finger_aperture <= 0.004))
                             )
 
                             target_placement_release = at_tabletop_placement_plane and (

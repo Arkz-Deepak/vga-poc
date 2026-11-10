@@ -280,6 +280,10 @@ def main():
         )
         run_cmd(grid_cmd, "Generating Side-by-Side Comparison Video Grid (VGA vs SmolVLA)", check=False)
 
+    # Clean up large checkpoints to keep output artifacts lightweight
+    import shutil
+    shutil.rmtree(ckpt_dir, ignore_errors=True)
+
     # List generated artifacts
     print("\nSaved Artifacts in /kaggle/working/:")
     run_cmd("ls -lh /kaggle/working/checkpoints /kaggle/working/results /kaggle/working/results/videos /kaggle/working/results/videos_smolvla", "Listing Output Files", check=False)

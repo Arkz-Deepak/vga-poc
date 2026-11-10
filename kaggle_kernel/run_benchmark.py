@@ -29,8 +29,12 @@ def main():
     print("=================================================================")
 
     # 1. Environment & Hardware Diagnostics
-    os.environ["MUJOCO_GL"] = "egl"
-    os.environ["PYOPENGL_PLATFORM"] = "egl"
+    if os.path.exists("/dev/nvidia0"):
+        os.environ["MUJOCO_GL"] = "egl"
+        os.environ["PYOPENGL_PLATFORM"] = "egl"
+    else:
+        os.environ["MUJOCO_GL"] = "osmesa"
+        os.environ["PYOPENGL_PLATFORM"] = "osmesa"
     os.environ["PYTHONUNBUFFERED"] = "1"
 
     run_cmd("nvidia-smi", "NVIDIA GPU Diagnostics", check=False)

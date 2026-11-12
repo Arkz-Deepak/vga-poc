@@ -95,6 +95,22 @@ if bench_root is not None:
 
     os.environ["LIBERO_CONFIG_PATH"] = str(pathlib.Path.home() / ".libero")
 
+# Backward compatibility: bridge RoboSuite 1.4.x and 1.5.x environment paths
+try:
+    import robosuite
+    import robosuite.environments
+    if not hasattr(robosuite.environments, "manipulation"):
+        import types
+        _mod_manip = types.ModuleType("robosuite.environments.manipulation")
+        robosuite.environments.manipulation = _mod_manip
+        sys.modules["robosuite.environments.manipulation"] = _mod_manip
+    if not hasattr(robosuite.environments.manipulation, "single_arm_env"):
+        import robosuite.environments.single_arm_env as _sae
+        robosuite.environments.manipulation.single_arm_env = _sae
+        sys.modules["robosuite.environments.manipulation.single_arm_env"] = _sae
+except Exception:
+    pass
+
 from libero.libero import benchmark
 from libero.libero.envs import OffScreenRenderEnv
 import numpy as np

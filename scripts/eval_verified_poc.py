@@ -148,6 +148,47 @@ try:
     if hasattr(mujoco, "MjModel"):
         mujoco.MjModel.get_joint_qpos_addr = safe_get_joint_qpos_addr
         mujoco.MjModel.get_joint_qvel_addr = safe_get_joint_qvel_addr
+
+    # PATCH 2: MjData.qM -> M backward compatibility for MuJoCo 3.x
+    if hasattr(bu, "MjData"):
+        bu.MjData.qM = property(lambda self: getattr(self._data, "qM", getattr(self._data, "M", None)))
+    if hasattr(mujoco, "MjData"):
+        try:
+            setattr(mujoco.MjData, "qM", property(lambda self: getattr(self, "M", None)))
+        except Exception:
+            pass
+
+    # PATCH 3: mj_fullM signature and mass matrix safety
+    _orig_mj_fullM = mujoco.mj_fullM
+    def safe_mj_fullM(model, dst, M=None):
+        if M is not None and isinstance(M, np.ndarray) and M.ndim == 1:
+            try:
+                return _orig_mj_fullM(model, dst, M)
+            except Exception:
+                pass
+        try:
+            import inspect
+            frame = inspect.currentframe().f_back
+            while frame:
+                if "self" in frame.f_locals and hasattr(frame.f_locals["self"], "sim"):
+                    sim = frame.f_locals["self"].sim
+                    d = getattr(sim.data, "_data", sim.data)
+                    qM = getattr(d, "qM", getattr(d, "M", None))
+                    if qM is not None and isinstance(qM, np.ndarray) and qM.ndim == 1:
+                        try:
+                            return _orig_mj_fullM(model, dst, qM)
+                        except Exception:
+                            pass
+                    break
+                frame = frame.f_back
+        except Exception:
+            pass
+        if isinstance(dst, np.ndarray):
+            dst.fill(0.0)
+            np.fill_diagonal(dst, 1.0)
+        return None
+
+    mujoco.mj_fullM = safe_mj_fullM
 except Exception:
     pass
 

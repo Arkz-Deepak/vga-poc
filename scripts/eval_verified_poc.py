@@ -111,6 +111,46 @@ try:
 except Exception:
     pass
 
+# Patch Python 3.13 / MuJoCo 3.x enum comparison in RoboSuite binding_utils
+try:
+    import mujoco
+    import robosuite.utils.binding_utils as bu
+
+    def safe_get_joint_qpos_addr(self, name):
+        joint_id = self.joint_name2id(name) if isinstance(name, str) else name
+        joint_type = int(self.jnt_type[joint_id])
+        joint_addr = int(self.jnt_qposadr[joint_id])
+        if joint_type == int(mujoco.mjtJoint.mjJNT_FREE):
+            return (joint_addr, joint_addr + 7)
+        elif joint_type == int(mujoco.mjtJoint.mjJNT_BALL):
+            return (joint_addr, joint_addr + 4)
+        else:
+            return joint_addr
+
+    def safe_get_joint_qvel_addr(self, name):
+        joint_id = self.joint_name2id(name) if isinstance(name, str) else name
+        joint_type = int(self.jnt_type[joint_id])
+        joint_addr = int(self.jnt_dofadr[joint_id])
+        if joint_type == int(mujoco.mjtJoint.mjJNT_FREE):
+            return (joint_addr, joint_addr + 6)
+        elif joint_type == int(mujoco.mjtJoint.mjJNT_BALL):
+            return (joint_addr, joint_addr + 3)
+        else:
+            return joint_addr
+
+    if hasattr(bu, "MjModel"):
+        bu.MjModel.get_joint_qpos_addr = safe_get_joint_qpos_addr
+        bu.MjModel.get_joint_qvel_addr = safe_get_joint_qvel_addr
+    if hasattr(bu, "get_joint_qpos_addr"):
+        bu.get_joint_qpos_addr = safe_get_joint_qpos_addr
+    if hasattr(bu, "get_joint_qvel_addr"):
+        bu.get_joint_qvel_addr = safe_get_joint_qvel_addr
+    if hasattr(mujoco, "MjModel"):
+        mujoco.MjModel.get_joint_qpos_addr = safe_get_joint_qpos_addr
+        mujoco.MjModel.get_joint_qvel_addr = safe_get_joint_qvel_addr
+except Exception:
+    pass
+
 from libero.libero import benchmark
 from libero.libero.envs import OffScreenRenderEnv
 import numpy as np

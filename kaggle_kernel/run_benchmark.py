@@ -134,20 +134,30 @@ def main():
     # 6. Checkpoint Resolution: Prioritize Genuine Colleague Checkpoint from Hugging Face
     ckpt_path = None
     target_ckpt = os.path.join(ckpt_dir, "best.pt")
+    soup_ckpt = None
 
     hf_token = os.environ.get("HF_TOKEN") or "".join(["hf_", "IFHlfIyNzA", "yzAYhGyNB", "PPAsMYvjszulQFU"])
     try:
-        print("⚡ Authenticating with Hugging Face to fetch vga_10shot_v11/best.pt...")
+        print("⚡ Authenticating with Hugging Face to fetch vga_10shot_v12 (primary) & v11 (soup)...")
         from huggingface_hub import hf_hub_download
+        v12_local = hf_hub_download(
+            repo_id="shafeeqsadiq/VGA-PoC-Checkpoints",
+            filename="vga_10shot_v12/best.pt",
+            local_dir=ckpt_dir,
+            token=hf_token
+        )
         v11_local = hf_hub_download(
             repo_id="shafeeqsadiq/VGA-PoC-Checkpoints",
             filename="vga_10shot_v11/best.pt",
             local_dir=ckpt_dir,
             token=hf_token
         )
+        if os.path.exists(v12_local) and os.path.getsize(v12_local) > 1_000_000_000:
+            ckpt_path = v12_local
+            print(f"✅ Successfully downloaded primary v12 checkpoint: {v12_local} ({os.path.getsize(v12_local)/(1024*1024):.1f} MB)!")
         if os.path.exists(v11_local) and os.path.getsize(v11_local) > 1_000_000_000:
-            ckpt_path = v11_local
-            print(f"✅ Successfully downloaded colleague v11 checkpoint: {v11_local} ({os.path.getsize(v11_local)/(1024*1024):.1f} MB)!")
+            soup_ckpt = v11_local
+            print(f"✅ Successfully downloaded WiSE-FT soup companion v11 checkpoint: {v11_local} ({os.path.getsize(v11_local)/(1024*1024):.1f} MB)!")
     except Exception as e:
         print(f"⚠️ Hugging Face download failed/unavailable: {e}")
 
@@ -177,21 +187,21 @@ def main():
 
     print(f"🎯 Evaluating VGA Policy Checkpoint: {ckpt_path} ({os.path.getsize(ckpt_path)/(1024*1024):.1f} MB)")
 
-    # Resolve Version 17 checkpoint for Decoupled WiSE-FT Weight-Space Ensemble
-    import glob
-    soup_ckpt = None
-    v17_cands = (
-        glob.glob("/kaggle/input/**/vga_libero_policy.pt", recursive=True) +
-        glob.glob("/kaggle/working/**/vga_libero_policy.pt", recursive=True) +
-        glob.glob(f"{repo_dir}/checkpoints/vga_libero_policy.pt")
-    )
-    for c in v17_cands:
-        if os.path.exists(c) and os.path.getsize(c) > 300_000_000:
-            soup_ckpt = c
-            print(f"⚡ Found Version 17 checkpoint for WiSE-FT ensemble: {soup_ckpt} ({os.path.getsize(soup_ckpt)/(1024*1024):.1f} MB)!")
-            break
+    # Resolve Companion Checkpoint for Decoupled WiSE-FT Weight-Space Ensemble if not set
+    if soup_ckpt is None:
+        import glob
+        v11_cands = (
+            glob.glob(f"{ckpt_dir}/*v11*/best.pt") +
+            glob.glob("/kaggle/input/**/best.pt", recursive=True) +
+            glob.glob("/kaggle/input/**/vga_libero_policy.pt", recursive=True)
+        )
+        for c in v11_cands:
+            if os.path.exists(c) and os.path.getsize(c) > 300_000_000 and c != ckpt_path:
+                soup_ckpt = c
+                print(f"⚡ Found companion checkpoint for WiSE-FT ensemble: {soup_ckpt} ({os.path.getsize(soup_ckpt)/(1024*1024):.1f} MB)!")
+                break
 
-    soup_arg = f"--soup_checkpoint {soup_ckpt} --soup_alpha 0.55 " if soup_ckpt else ""
+    soup_arg = f"--soup_checkpoint {soup_ckpt} --soup_alpha 0.60 " if soup_ckpt else ""
 
     # 7. Official Closed-Loop Multi-Task Physical Benchmark (All 10 Tasks, 100 Episodes)
     eval_closed_loop_cmd = (

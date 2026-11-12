@@ -678,14 +678,16 @@ def evaluate(args: argparse.Namespace):
                     cur_x, cur_y, cur_z = float(cur_eef_pos[0]), float(cur_eef_pos[1]), float(cur_eef_pos[2])
 
                     if not getattr(args, "pure_policy", False):
-                        if cur_x > 0.18 and action[0] > 0.0:
+                        if cur_x > 0.24 and action[0] > 0.0:
                             action[0] = 0.0
-                        if cur_x < -0.29 and action[0] < 0.0:
+                        if cur_x < -0.32 and action[0] < 0.0:
                             action[0] = 0.0
-                        if cur_y > 0.44 and action[1] > 0.0:
+                        if cur_y > 0.46 and action[1] > 0.0:
                             action[1] = 0.0
-                        if cur_y < -0.28 and action[1] < 0.0:
+                        if cur_y < -0.32 and action[1] < 0.0:
                             action[1] = 0.0
+                        if cur_z > 1.28 and action[2] > 0.0:
+                            action[2] = 0.0
 
                     xy_speed = float(np.linalg.norm(action[:2]))
                     finger_aperture = get_gripper_aperture(obs)

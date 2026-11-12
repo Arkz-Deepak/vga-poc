@@ -26,6 +26,11 @@ import sys
 import time
 from typing import Any, Dict, List, Optional
 
+# Auto-detect LIBERO in standard paths (Kaggle, Colab, local)
+for _cand in ["/kaggle/working/LIBERO", os.path.expanduser("~/LIBERO"), "/content/LIBERO", os.path.abspath("LIBERO")]:
+    if os.path.exists(_cand) and _cand not in sys.path:
+        sys.path.insert(0, _cand)
+
 os.environ["MUJOCO_GL"] = "egl"
 os.environ["PYOPENGL_PLATFORM"] = "egl"
 

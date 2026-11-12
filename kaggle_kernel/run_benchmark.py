@@ -136,10 +136,15 @@ def main():
 
     # 4. Clone / Sync latest repository from GitHub
     repo_dir = "/kaggle/working/vga-poc"
+    libero_dir = "/kaggle/working/LIBERO"
     if not os.path.exists(repo_dir):
         run_cmd(f"git clone https://github.com/Arkz-Deepak/vga-poc.git {repo_dir}", "Cloning latest vga-poc repository")
     else:
         run_cmd(f"cd {repo_dir} && git fetch origin && git reset --hard origin/main", "Updating vga-poc to latest origin/main")
+
+    os.environ["PYTHONPATH"] = f"{libero_dir}:{repo_dir}:" + os.environ.get("PYTHONPATH", "")
+    sys.path.insert(0, libero_dir)
+    sys.path.insert(0, repo_dir)
 
     # 5. Output directories
     ckpt_dir = "/kaggle/working/checkpoints"
@@ -213,6 +218,7 @@ def main():
 
     # 7. Official Closed-Loop Multi-Task Physical Benchmark (All 10 Tasks, 100 Episodes)
     eval_closed_loop_cmd = (
+        f"PYTHONPATH=/kaggle/working/LIBERO:{repo_dir}:$PYTHONPATH "
         f"python {repo_dir}/scripts/eval_verified_poc.py "
         f"--checkpoint {ckpt_path} "
         f"{soup_arg}"
@@ -296,9 +302,11 @@ def main():
         )
         run_cmd(grid_cmd, "Generating Side-by-Side Comparison Video Grid (VGA vs SmolVLA)", check=False)
 
-    # Clean up large checkpoints to keep output artifacts lightweight
+    # Clean up large checkpoints and cloned git repos to keep output artifacts lightweight
     import shutil
     shutil.rmtree(ckpt_dir, ignore_errors=True)
+    shutil.rmtree("/kaggle/working/LIBERO", ignore_errors=True)
+    shutil.rmtree(repo_dir, ignore_errors=True)
 
     # List generated artifacts
     print("\nSaved Artifacts in /kaggle/working/:")

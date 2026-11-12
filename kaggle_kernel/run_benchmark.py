@@ -49,19 +49,31 @@ def main():
 
     # 3. Install Python Dependencies
     run_cmd("pip uninstall -y torchao 2>/dev/null || true", "Removing Incompatible torchao Stub", check=False)
+    # Install LIBERO cleanly without failing on Python 3.13 egl_probe build
+    run_cmd(
+        'git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git /kaggle/working/LIBERO 2>/dev/null || '
+        'git -C /kaggle/working/LIBERO pull 2>/dev/null || true',
+        "Cloning LIBERO repository", check=False
+    )
+    run_cmd(
+        'pip install --no-deps -e /kaggle/working/LIBERO 2>/dev/null || '
+        'pip install --quiet --break-system-packages "libero>=0.1.0" 2>/dev/null || true',
+        "Installing LIBERO via --no-deps (Clean Python 3.13 install)", check=False
+    )
     pip_cmd = (
         'pip install --quiet --break-system-packages "av<14" datasets num2words '
         'git+https://github.com/huggingface/lerobot.git '
-        'zarr einops scipy torchvision peft accelerate matplotlib imageio imageio-ffmpeg "hf-libero>=0.1.4" mujoco h5py 2>/dev/null || '
+        'zarr einops scipy torchvision peft accelerate matplotlib imageio imageio-ffmpeg mujoco h5py 2>/dev/null || '
         'pip install --quiet "av<14" datasets num2words '
         'git+https://github.com/huggingface/lerobot.git '
-        'zarr einops scipy torchvision peft accelerate matplotlib imageio imageio-ffmpeg "hf-libero>=0.1.4" mujoco h5py'
+        'zarr einops scipy torchvision peft accelerate matplotlib imageio imageio-ffmpeg mujoco h5py'
     )
-    run_cmd(pip_cmd, "Installing Python Robotics Dependencies (LeRobot, LIBERO, MuJoCo, H5Py)")
+    run_cmd(pip_cmd, "Installing Python Robotics Dependencies (LeRobot, MuJoCo, H5Py)")
 
     # 3B. Pre-download LIBERO assets & configure LIBERO paths for Headless Execution
     print("⚡ Configuring LIBERO benchmark paths and downloading simulation assets...")
     try:
+        sys.path.insert(0, "/kaggle/working/LIBERO")
         import libero
         import pathlib
         import yaml

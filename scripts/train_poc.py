@@ -361,7 +361,7 @@ def train_vga(args: argparse.Namespace):
         if param.requires_grad:
             if "lora_" in name:
                 lora_params.append(param)
-            elif "fine_coord_mlp" in name or "eef_pos_cond" in name or "vis_skip_gate" in name or "alpha_gate" in name:
+            elif "fine_coord_mlp" in name or "eef_pos_cond" in name or "vis_skip_gate" in name or "alpha_gate" in name or "geom_modulation" in name:
                 fast_zero_init_params.append(param)
             else:
                 standard_params.append(param)
@@ -493,6 +493,10 @@ def train_vga(args: argparse.Namespace):
         tau_bc = tau.view(-1, 1, 1)
         x_tau = (1.0 - tau_bc) * x_0 + tau_bc * x_1_norm
 
+        geom_feat = batch.get("geom_feat", None)
+        if geom_feat is not None:
+            geom_feat = geom_feat.to(device, non_blocking=True)
+
         with torch.amp.autocast(device_type="cuda" if device.type == "cuda" else "cpu", dtype=amp_dtype, enabled=use_amp):
             v_pred, spatial_metric_features, gripper_logits = policy(
                 rgb=rgb_front,
@@ -505,6 +509,7 @@ def train_vga(args: argparse.Namespace):
                 t_base_wrist=t_base_wrist,
                 wrist_intrinsics=wrist_intrinsics,
                 prompt=prompt,
+                geom_feat=geom_feat,
                 return_gripper_logits=True,
                 depth_front_override=depth_front,
                 depth_wrist_override=depth_wrist

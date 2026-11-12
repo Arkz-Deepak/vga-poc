@@ -409,6 +409,24 @@ class LiberoSpatialDataset(Dataset):
         if target_3d_features is not None:
             batch_dict["target_3d_features"] = target_3d_features
 
+        # 8. 3D Geometric Features for G-Modulation (Relative Grasp & Goal Displacements)
+        cur_eef = ep["eef_pos"][t] if ep.get("eef_pos") is not None and len(ep["eef_pos"]) > t else np.zeros(3, dtype=np.float32)
+        if ep.get("eef_pos") is not None and len(ep["eef_pos"]) > 0:
+            grip_actions = ep["actions"][:, 6] if ep["actions"].shape[-1] >= 7 else np.zeros(len(ep["actions"]))
+            closed_indices = np.where(grip_actions > 0)[0]
+            if len(closed_indices) > 0:
+                t_grasp = int(closed_indices[0])
+            else:
+                t_grasp = min(len(ep["eef_pos"]) // 2, len(ep["eef_pos"]) - 1)
+            target_pos = ep["eef_pos"][t_grasp]
+            goal_pos = ep["eef_pos"][-1]
+            delta_target = (target_pos - cur_eef).astype(np.float32)
+            delta_goal = (goal_pos - cur_eef).astype(np.float32)
+            geom_feat_arr = np.concatenate([delta_target, delta_goal, cur_eef]).astype(np.float32)
+        else:
+            geom_feat_arr = np.zeros(9, dtype=np.float32)
+        batch_dict["geom_feat"] = torch.from_numpy(geom_feat_arr).float()
+
         return batch_dict
 
     @staticmethod

@@ -61,14 +61,18 @@ def main():
         "Installing LIBERO via --no-deps (Clean Python 3.13 install)", check=False
     )
     pip_cmd = (
-        'pip install --quiet --break-system-packages "av<14" datasets num2words '
+        'pip install --quiet --break-system-packages "robosuite>=1.4.1" "bddl" "av<14" datasets num2words '
         'git+https://github.com/huggingface/lerobot.git '
         'zarr einops scipy torchvision peft accelerate matplotlib imageio imageio-ffmpeg mujoco h5py 2>/dev/null || '
-        'pip install --quiet "av<14" datasets num2words '
+        'pip install --quiet "robosuite>=1.4.1" "bddl" "av<14" datasets num2words '
         'git+https://github.com/huggingface/lerobot.git '
         'zarr einops scipy torchvision peft accelerate matplotlib imageio imageio-ffmpeg mujoco h5py'
     )
-    run_cmd(pip_cmd, "Installing Python Robotics Dependencies (LeRobot, MuJoCo, H5Py)")
+    run_cmd(pip_cmd, "Installing Python Robotics Dependencies (RoboSuite, BDDL, LeRobot, MuJoCo, H5Py)")
+    run_cmd(
+        'python3 -c "import site, os, shutil; [shutil.rmtree(os.path.join(s, \'mujoco\', \'plugin\'), ignore_errors=True) for s in site.getsitepackages()]" 2>/dev/null || true',
+        "Cleaning bundled MuJoCo plugins", check=False
+    )
 
     # 3B. Pre-configure LIBERO paths for Headless Execution
     print("⚡ Configuring LIBERO benchmark paths for Headless Execution...")

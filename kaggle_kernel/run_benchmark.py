@@ -70,43 +70,29 @@ def main():
     )
     run_cmd(pip_cmd, "Installing Python Robotics Dependencies (LeRobot, MuJoCo, H5Py)")
 
-    # 3B. Pre-download LIBERO assets & configure LIBERO paths for Headless Execution
-    print("⚡ Configuring LIBERO benchmark paths and downloading simulation assets...")
+    # 3B. Pre-configure LIBERO paths for Headless Execution
+    print("⚡ Configuring LIBERO benchmark paths for Headless Execution...")
     try:
-        sys.path.insert(0, "/kaggle/working/LIBERO")
-        import libero
         import pathlib
         import yaml
-        from huggingface_hub import snapshot_download
 
-        lib_pkg_dir = pathlib.Path(libero.__file__).resolve().parent
-        bench_root = None
-        for cand in [lib_pkg_dir / "libero", lib_pkg_dir]:
-            if (cand / "bddl_files").exists():
-                bench_root = cand
-                break
-        if bench_root is None:
-            found_bddl = list(lib_pkg_dir.rglob("libero_spatial"))
-            if found_bddl:
-                bench_root = found_bddl[0].parent.parent
-            else:
-                bench_root = lib_pkg_dir
+        bench_root = pathlib.Path("/kaggle/working/LIBERO/libero/libero")
+        if not (bench_root / "bddl_files").exists():
+            for _alt in [pathlib.Path("/kaggle/working/LIBERO/libero"), pathlib.Path.home() / "LIBERO/libero/libero"]:
+                if (_alt / "bddl_files").exists():
+                    bench_root = _alt
+                    break
 
         bddl_dir = bench_root / "bddl_files"
         init_dir = bench_root / "init_files"
-        assets_dir = pathlib.Path("/root/.cache/libero/assets")
-        assets_dir.mkdir(parents=True, exist_ok=True)
-
-        print(f"📦 Found LIBERO package root: {bench_root}")
-        print(f"📦 BDDL files located at:     {bddl_dir}")
-        print(f"📦 Init states located at:   {init_dir}")
-        print(f"📦 Assets directory:         {assets_dir}")
+        assets_dir = bench_root / "assets"
+        datasets_dir = bench_root.parent / "datasets"
 
         cfg = {
             "benchmark_root": str(bench_root),
             "bddl_files": str(bddl_dir),
             "init_states": str(init_dir),
-            "datasets": str(bench_root.parent / "datasets"),
+            "datasets": str(datasets_dir),
             "assets": str(assets_dir)
         }
 
@@ -118,21 +104,8 @@ def main():
 
         os.environ["LIBERO_CONFIG_PATH"] = "/root/.libero"
         print("✔ Pre-configured ~/.libero/config.yaml for headless execution!")
-
-        # Download assets directly via snapshot_download from lerobot/libero-assets
-        hf_tok = os.environ.get("HF_TOKEN") or "".join(["hf_", "IFHlfIyNzA", "yzAYhGyNB", "PPAsMYvjszulQFU"])
-        print("⚡ Downloading 586 LIBERO simulation assets from Hugging Face (lerobot/libero-assets)...")
-        snapshot_download(
-            repo_id="lerobot/libero-assets",
-            repo_type="dataset",
-            local_dir=str(assets_dir),
-            token=hf_tok
-        )
-        asset_count = sum(len(files) for _, _, files in os.walk(str(assets_dir)))
-        print(f"✔ Downloaded {asset_count} simulation asset files to {assets_dir} successfully!")
-
     except Exception as e:
-        print(f"⚠️ Notice setting up libero config and assets: {e}")
+        print(f"⚠️ Notice setting up libero config: {e}")
 
     # 4. Clone / Sync latest repository from GitHub
     repo_dir = "/kaggle/working/vga-poc"
@@ -218,7 +191,7 @@ def main():
 
     # 7. Official Closed-Loop Multi-Task Physical Benchmark (All 10 Tasks, 100 Episodes)
     eval_closed_loop_cmd = (
-        f"PYTHONPATH=/kaggle/working/LIBERO:{repo_dir}:$PYTHONPATH "
+        f"printf 'N\\n' | PYTHONPATH=/kaggle/working/LIBERO:{repo_dir}:$PYTHONPATH "
         f"python {repo_dir}/scripts/eval_verified_poc.py "
         f"--checkpoint {ckpt_path} "
         f"{soup_arg}"

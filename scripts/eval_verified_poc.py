@@ -34,38 +34,57 @@ for _cand in ["/kaggle/working/LIBERO", os.path.expanduser("~/LIBERO"), "/conten
 os.environ["MUJOCO_GL"] = "egl"
 os.environ["PYOPENGL_PLATFORM"] = "egl"
 
-# Pre-populate ~/.libero/config.yaml dynamically so libero never prompts for interactive stdin
+# Auto-mock input so headless environments never fail with EOFError
+import builtins
+builtins.input = lambda *args: "N"
+
+# Pre-populate ~/.libero/config.yaml dynamically without relying on libero.__file__
 import pathlib
 import yaml
 
-try:
-    import libero
-    lib_pkg_dir = pathlib.Path(libero.__file__).resolve().parent
-    bench_root = None
-    for cand in [lib_pkg_dir / "libero", lib_pkg_dir]:
-        if (cand / "bddl_files").exists():
-            bench_root = cand
-            break
-    if bench_root is None:
-        found_bddl = list(lib_pkg_dir.rglob("libero_spatial"))
-        if found_bddl:
-            bench_root = found_bddl[0].parent.parent
-        else:
-            bench_root = lib_pkg_dir
+bench_root = None
+for _c in [
+    pathlib.Path("/kaggle/working/LIBERO/libero/libero"),
+    pathlib.Path("/kaggle/working/LIBERO/libero"),
+    pathlib.Path.home() / "LIBERO/libero/libero",
+    pathlib.Path.cwd() / "LIBERO/libero/libero"
+]:
+    if (_c / "bddl_files").exists():
+        bench_root = _c
+        break
 
+if bench_root is None:
+    try:
+        import libero
+        if hasattr(libero, "__file__") and libero.__file__:
+            _p = pathlib.Path(libero.__file__).resolve().parent
+            for _sub in [_p / "libero", _p]:
+                if (_sub / "bddl_files").exists():
+                    bench_root = _sub
+                    break
+    except Exception:
+        pass
+
+if bench_root is not None:
     bddl_dir = bench_root / "bddl_files"
     init_dir = bench_root / "init_files"
-    assets_dir = pathlib.Path("/root/.cache/libero/assets")
+    assets_dir = bench_root / "assets"
+    datasets_dir = bench_root.parent / "datasets"
 
     cfg = {
         "benchmark_root": str(bench_root),
         "bddl_files": str(bddl_dir),
         "init_states": str(init_dir),
-        "datasets": str(bench_root.parent / "datasets"),
+        "datasets": str(datasets_dir),
         "assets": str(assets_dir)
     }
 
-    for base_dir in [pathlib.Path.home() / ".libero", pathlib.Path("/root/.libero"), pathlib.Path.cwd() / ".libero"]:
+    for base_dir in [
+        pathlib.Path.home() / ".libero",
+        pathlib.Path("/root/.libero"),
+        pathlib.Path.cwd() / ".libero",
+        pathlib.Path("/kaggle/working/.libero")
+    ]:
         try:
             base_dir.mkdir(parents=True, exist_ok=True)
             cfg_file = base_dir / "config.yaml"
@@ -73,8 +92,8 @@ try:
                 yaml.dump(cfg, f)
         except Exception:
             pass
-except Exception:
-    pass
+
+    os.environ["LIBERO_CONFIG_PATH"] = str(pathlib.Path.home() / ".libero")
 
 from libero.libero import benchmark
 from libero.libero.envs import OffScreenRenderEnv

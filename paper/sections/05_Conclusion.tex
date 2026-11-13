@@ -1,0 +1,22 @@
+\FloatBarrier
+\section{Conclusion and Future Work}
+\label{sec:conclusion}
+
+In this paper, we introduced \textbf{Vision-Geometry-Action (VGA)}, a lightweight (375M parameter), geometry-grounded manipulation policy designed for real-time edge execution, spatial invariance, and hardware-safe kinematic smoothness. By embedding continuous \textbf{3D Ray-RoPE} directly into transformer attention layers, VGA grounds visual semantic features in physical 3D camera ray geometry without relying on explicit depth sensors or compute-intensive point clouds. To solve the pervasive chunk-boundary discontinuity problem inherent to action-chunking diffusion models, VGA introduces receding-horizon prior-action conditioning coupled with a boundary velocity-matching loss ($\mathcal{L}_{\text{smooth}}$).
+
+Extensive closed-loop evaluations validate the core strengths of this approach:
+\begin{enumerate}
+    \item \textbf{High Few-Shot Dexterity:} Under a strict 10-shot training budget on LIBERO-Spatial, VGA achieves an \textbf{85.0\%} verified closed-loop success rate with an average episode length of 170.1 steps.
+    \item \textbf{Kinematic Smoothness and Actuator Safety:} In controlled 3-seed ablations across 600 rollouts, our smooth chunk boundary formulation suppresses acceleration spikes from $2.83\times$ down to \textbf{$1.05\times$} and slashes trajectory RMS jerk by \textbf{35.4\%} ($11.38 \rightarrow 7.35\,\text{m/s}^3$), eliminating actuator shudder without sacrificing manipulation dexterity.
+    \item \textbf{Camera Extrinsics Invariance:} When subjected to severe mid-task camera shifts on LIBERO-MAX, while monolithic models like X-VLA collapse by 67.5\% (dropping to 30.5\% SR), VGA maintains 74.5\% SR (a minimal 4.5\% loss), demonstrating empirical spatial invariance under viewpoint perturbations.
+    \item \textbf{Edge Hardware Viability:} With a VRAM footprint below 3.0\,GB and chunk inference latency of 152\,ms on a standard NVIDIA Tesla T4 GPU, VGA provides a practical pathway for deploying robust robotic foundation policies directly on physical robot controllers.
+\end{enumerate}
+
+\subsection{Limitations and Future Directions}
+While VGA establishes strong empirical foundations, several exciting avenues remain for future exploration:
+\begin{itemize}
+    \item \textbf{Complex Multi-Object Sequential Manipulation:} Extending the policy to long-horizon composite manipulation chains involving multi-step tooling and non-prehensile interaction across expanded multi-stage benchmarks.
+    \item \textbf{Sim-to-Real Hardware Transfer:} Deploying the lightweight 375M parameter policy directly onto physical robotic manipulators (e.g., physical 7-DoF Franka Emika Panda) to validate real-world contact dynamics, tactile feedback, and eye-in-hand optical variations.
+\end{itemize}
+
+% [PLACEHOLDER / FUTURE HARDWARE EXTENSION: If authors conduct real-world physical robot experiments, e.g., on a 7-DoF Franka Emika Panda arm, insert real-robot setup details, camera calibration methods (e.g., Charuco board eye-to-hand calibration), and physical grasp success rates here.]

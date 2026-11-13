@@ -1,0 +1,88 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%2345678901234567890123456789012345678901234567890123456789012345678901234567890
+%        1         2         3         4         5         6         7         8
+
+\documentclass[letterpaper, 10 pt, conference]{ieeeconf}  % Comment this line out if you need a4paper
+
+%\documentclass[a4paper, 10pt, conference]{ieeeconf}      % Use this line for a4 paper
+
+\IEEEoverridecommandlockouts                              % This command is only needed if 
+                                                          % you want to use the \thanks command
+
+\overrideIEEEmargins                                      % Needed to meet printer requirements.
+
+%In case you encounter the following error:
+%Error 1010 The PDF file may be corrupt (unable to open PDF file) OR
+%Error 1000 An error occurred while parsing a contents stream. Unable to analyze the PDF file.
+%This is a known problem with pdfLaTeX conversion filter. The file cannot be opened with acrobat reader
+%Please use one of the alternatives below to circumvent this error by uncommenting one or the other
+%\pdfobjcompresslevel=0
+%\pdfminorversion=4
+
+% See the \addtolength commandClose Loop project. The HPC resources were provided by the Pioneer Centre later in the file to balance the column lengths
+% on the last page of the document
+
+% The following packages can be found on http:\\www.ctan.org
+% \usepackage{graphics} % for pdf, bitmapped graphics files
+% \usepackage{epsfig} % for postscript graphics files
+% \usepackage{mathptmx} % assumes new font selection scheme installed
+% \usepackage{times} % assumes new font selection scheme installed
+% \usepackage{amsmath} % assumes amsmath package installed
+% \usepackage{amssymb}  % assumes amsmath package installed
+
+\usepackage[dvipsnames]{xcolor}  % Load xcolor first, with options
+\usepackage{graphicx}            % Only once
+% \usepackage{caption}
+\usepackage{tikz}
+\usepackage{etoolbox}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{amsmath}
+\usepackage{verbatim}
+\usepackage{colortbl}
+\usepackage{amsfonts}
+\usepackage{csquotes}
+\usepackage{hyperref}
+\usepackage{subfig}
+%\usepackage{float}
+\usepackage{placeins}
+\usepackage{url}
+
+
+% \title{\LARGE 
+% \bf
+% Can We Evaluate Vision-Language-Action Models \\ for Robot Manipulation Without Policy Rollouts?}
+
+\title{\LARGE 
+\bf
+VGA: Vision-Geometry-Action Policy with Continuous 3D Ray-RoPE \\ for Smooth and Camera-Invariant Robot Manipulation}
+
+\author{Anonymous Authors%
+\thanks{Under review for academic conference publication.}%
+}
+
+\raggedbottom
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+\pagestyle{empty}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{abstract}
+Vision-Language-Action (VLA) models show substantial promise for generalist robotic manipulation, yet standard monolithic architectures face three critical bottlenecks: high computational footprint ($>$7B parameters), acute vulnerability to camera viewpoint and extrinsics shifts, and mechanical joint jerkiness caused by discontinuous action-chunk boundaries. In this work, we propose \textbf{Vision-Geometry-Action (VGA)}, a lightweight (375M parameter) manipulation policy that directly couples visual semantics with metric 3D scene geometry and kinematically smooth trajectory generation. VGA integrates continuous \textbf{3D Ray-RoPE} (Ray-based Rotary Position Embeddings) into transformer attention layers, projecting physical camera ray geometry directly into latent spatial representations without requiring explicit depth sensors or 3D point cloud reconstructions. To eliminate inter-chunk trajectory discontinuities common in receding-horizon diffusion models, VGA employs prior-action conditioning with a boundary velocity-matching loss ($\mathcal{L}_{\text{smooth}}$). 
+
+Evaluated across rigorous closed-loop robotic manipulation benchmarks, VGA achieves an \textbf{85.0\%} verified success rate under 10-shot fine-tuning on LIBERO-Spatial. In controlled multi-seed kinematic ablations, our smooth chunk join formulation reduces trajectory RMS jerk by \textbf{35.4\%} (from 11.38 to 7.35\,$\text{m/s}^3$) and suppresses chunk-boundary acceleration jumps from $2.83\times$ down to $1.05\times$. Furthermore, under severe out-of-distribution camera extrinsics perturbations in LIBERO-MAX, while monolithic models collapse from 98.0\% to 30.5\% ($-67.5\%$), VGA retains 74.5\% success ($-4.5\%$), proving geometric invariance. Operating under a sub-3.0\,GB VRAM footprint with 152\,ms chunk latency on an edge NVIDIA T4 GPU, VGA demonstrates that lightweight, geometry-grounded policies can achieve state-of-the-art robustness, efficiency, and hardware-safe smoothness.
+\end{abstract}
+
+\input{sections/01_Introduction}
+\input{sections/02_RelatedWork}
+\input{sections/03_Method}
+\input{sections/04_Experiments}
+\input{sections/05_Conclusion}
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\end{document}

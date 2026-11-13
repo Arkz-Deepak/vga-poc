@@ -101,54 +101,24 @@ During inference, starting from Gaussian noise $\mathbf{A}_0 \sim \mathcal{N}(\m
 \end{equation}
 In our implementation, setting $N_{\text{step}} = 10$ provides real-time chunk inference within 152\,ms on an edge NVIDIA T4 GPU while preserving high rollout fidelity.
 
-\subsection{Vision-Grounded Geometric Spatial Modulation (G-Modulation)}
-While 3D Ray-RoPE provides camera-pose invariance across visual tokens, manipulation policies frequently encounter elevated obstacle clutter (e.g., retrieving objects placed inside drawers, on elevated cookie boxes, or behind tall rims). In such regimes, standard 2D attention suffers from depth ambiguity and spatial smearing, leading to stall loops or rim collisions.
-
-To provide direct geometric affordance guidance without resorting to non-differentiable heuristic controllers or privileged simulation state, we introduce \textbf{Vision-Grounded Geometric Spatial Modulation (G-Modulation)}. G-Modulation extracts legitimate 3D continuous metric displacement vectors purely from visual observations and camera geometry:
-\begin{enumerate}
-    \item \textbf{Vision-Based 3D Centroid Grounding:} Given front camera visual observations $\mathbf{I}_{\text{front}}$ and task prompt $\mathbf{l}$, 2D spatial centroids for the target object $(u_{\text{target}}, v_{\text{target}})$ and goal receptacle $(u_{\text{goal}}, v_{\text{goal}})$ are grounded from appearance feature activations.
-    \item \textbf{Metric Depth Back-Projection:} Using predicted metric depth $\hat{z}$ and camera intrinsics $\mathbf{K}$, 2D image coordinates are back-projected into 3D camera space:
-    \begin{equation}
-    \mathbf{p}_{\text{cam}} = \hat{z} \cdot \mathbf{K}^{-1} [u, v, 1]^T,
-    \end{equation}
-    and mapped into the physical robot base frame using known camera extrinsics $\mathbf{T}_{\text{base}\leftarrow\text{cam}} = [\mathbf{R} \mid \mathbf{t}]$:
-    \begin{equation}
-    \mathbf{p}_{\text{base}} = \mathbf{R} \, \mathbf{p}_{\text{cam}} + \mathbf{t}.
-    \end{equation}
-    \item \textbf{Continuous Relative Affordance Vector:} The policy computes the 9-dimensional continuous relative geometric representation:
-    \begin{equation}
-    \mathbf{g} = \left[ \mathbf{p}_{\text{target, base}} - \mathbf{p}_{\text{eef}}, \; \mathbf{p}_{\text{goal, base}} - \mathbf{p}_{\text{eef}}, \; \mathbf{p}_{\text{eef}} \right] \in \mathbb{R}^9,
-    \end{equation}
-    capturing immediate relative clearance and displacement vectors directly in motor coordinates.
-\end{enumerate}
-
-The geometric affordance vector $\mathbf{g}$ is processed through a dedicated 3-layer MLP adapter $\phi_{\text{geom}}$ with zero-initialized final weights and a learnable scaling parameter $\gamma \in \mathbb{R}$:
-\begin{equation}
-\mathbf{m}_{\text{geom}} = \gamma \cdot \phi_{\text{geom}}(\mathbf{g}) \in \mathbb{R}^{d_{\text{hidden}}}.
-\end{equation}
-This geometric representation directly modulates the DiT global AdaLN conditioning vector $\mathbf{c}$:
-\begin{equation}
-\mathbf{c}' = \mathbf{c} + \mathbf{m}_{\text{geom}},
-\end{equation}
-allowing the diffusion velocity field $\mathbf{v}_\theta(\mathbf{A}_\tau, \tau, \mathbf{c}')$ to be smoothly guided by physical 3D obstacle clearances. Because the projection is zero-initialized and trained end-to-end with the conditional flow matching loss $\mathcal{L}_{\text{CFM}}$ on demonstration trajectories, G-Modulation operates strictly within the neural policy without breaking end-to-end differentiability or requiring simulator state overrides.
-
 \subsection{Smooth Chunk Boundary Coupling}
 A notorious drawback of action-chunking policies is chunk-boundary discontinuity: because chunks $\mathbf{A}^{(k-1)}$ and $\mathbf{A}^{(k)}$ are sampled independently, the transition between the last action of chunk $k-1$ and the first action of chunk $k$ produces severe acceleration and jerk spikes.
 
 To eliminate this boundary artifact, VGA incorporates two complementary mechanisms:
 \begin{enumerate}
     \item \textbf{Receding Prior-Action Token Conditioning:} The action expert prepends the $P=4$ most recently executed physical actions $\mathbf{a}_{\text{prev}} = [\mathbf{a}_{-P+1}, \dots, \mathbf{a}_0]$ as fixed context tokens into the DiT attention sequence, anchoring the initial state and velocity.
-    \item \textbf{Analytical Boundary Velocity Penalty ($\mathcal{L}_{\text{smooth}}$):} We enforce first-order velocity continuity ($C^1$) across the temporal boundary by penalizing acceleration mismatch between the prior chunk tail and the newly predicted chunk head:
+    \item \textbf{Analytical Boundary Velocity Penalty ($\mathcal{L}_{\text{smooth}}$):} We enforce first-order velocity continuity ($C^1$) across the temporal boundary by regularizing velocity mismatch between the prior chunk tail and newly predicted chunk head:
     \begin{equation}
     \mathcal{L}_{\text{smooth}} = \left\| (\mathbf{a}_1 - \mathbf{a}_0) - (\mathbf{a}_0 - \mathbf{a}_{-1}) \right\|_2^2,
     \end{equation}
     where $\mathbf{a}_{-1}, \mathbf{a}_0$ denote the two most recent executed physical steps, and $\mathbf{a}_1$ is the first predicted action step of the new chunk.
 \end{enumerate}
 
-Binary gripper activation is trained using binary cross-entropy:
+Binary gripper activation is trained using a transition-weighted binary cross-entropy loss:
 \begin{equation}
-\mathcal{L}_{\text{grip}} = -\sum_{t=1}^H \left[ g_t \log \hat{g}_t + (1 - g_t) \log (1 - \hat{g}_t) \right].
+\mathcal{L}_{\text{grip}} = -\sum_{t=1}^H w_t \left[ g_t \log \hat{g}_t + (1 - g_t) \log (1 - \hat{g}_t) \right],
 \end{equation}
+preventing intermediate floating-point gripper drift.
 
 The overall training objective is optimized end-to-end:
 \begin{equation}

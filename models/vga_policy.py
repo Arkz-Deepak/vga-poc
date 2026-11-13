@@ -164,7 +164,7 @@ class VGAPolicy(nn.Module):
     def _bootstrap_from_oxe(self, expected_context_dim: int, expected_dit_dim: int, strict: bool = False):
         print(">> Attempting to bootstrap Open X-Embodiment (OXE) foundational weights...")
         try:
-            repo_id = "lerobot/diffusion_policy_resnet50_pusht"
+            repo_id = "lerobot/diffusion_pusht"
             filename = "model.safetensors"
             local_path = hf_hub_download(repo_id=repo_id, filename=filename)
             from safetensors.torch import load_file

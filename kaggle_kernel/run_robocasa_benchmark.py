@@ -350,8 +350,8 @@ print("\\n" + "="*70)
 print(">> STEP B: Collecting 20 Certified Successful Demonstrations (Diverse Quadrants)")
 print("="*70)
 
-demo_path = "/kaggle/working/kitchen_demos_20shot.hdf5"
-NUM_TARGET_DEMOS = 20
+demo_path = "/kaggle/working/kitchen_demos_10shot.hdf5"
+NUM_TARGET_DEMOS = 10
 successful_demos = []
 
 class WaypointExpert:
@@ -675,7 +675,7 @@ trainable_count = sum(p.numel() for p in trainable_params)
 print(f">> Trainable parameters: {{trainable_count/1e6:.1f}}M (including G-Modulation AdaLN adapter)")
 
 optimizer = torch.optim.AdamW(trainable_params, lr=1.5e-4, weight_decay=1e-4)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=1200, eta_min=1e-6)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=800, eta_min=1e-6)
 
 policy.train()
 if hasattr(policy, "dit") and hasattr(policy.dit, "gripper_head_trained"):
@@ -683,7 +683,7 @@ if hasattr(policy, "dit") and hasattr(policy.dit, "gripper_head_trained"):
 
 t_ft_start = time.time()
 loader_iter = iter(loader)
-FINETUNE_STEPS = 1200
+FINETUNE_STEPS = 800
 
 for step in range(FINETUNE_STEPS):
     try:
@@ -760,8 +760,8 @@ policy.eval()
 if hasattr(policy, "dit") and hasattr(policy.dit, "gripper_head_trained"):
     policy.dit.gripper_head_trained.fill_(True)
 
-num_episodes = 20
-max_steps_per_episode = 500
+num_episodes = 10
+max_steps_per_episode = 400
 success_count = 0
 all_episode_steps = []
 all_jerks = []

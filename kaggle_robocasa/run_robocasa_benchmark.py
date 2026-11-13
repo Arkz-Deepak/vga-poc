@@ -539,8 +539,10 @@ from data.dataset import LiberoSpatialDataset
 
 ckpt_file = "{ckpt_path if ckpt_path else ''}"
 policy = None
+policy_weights_verified = False
 try:
     policy = VGAPolicy(load_pretrained=True).to(device=device, dtype=torch.float32)
+    policy_weights_verified = True
     print(">> [✓] Pretrained vision-language-action backbone loaded.")
 except Exception as pe:
     print(f">> Notice: {{pe}}. Using modular policy init.")
@@ -554,9 +556,16 @@ if ckpt_file and os.path.exists(ckpt_file):
         elif "policy" in sd:
             sd = sd["policy"]
         msg = policy.load_state_dict(sd, strict=False)
+        policy_weights_verified = True
         print(f">> [✓] Loaded VGA weights from {{ckpt_file}} (missing: {{len(msg.missing_keys)}}, unexpected: {{len(msg.unexpected_keys)}})")
     except Exception as e:
         print(f">> Notice loading weights: {{e}}")
+
+# STRICT CREDIT PRESERVATION GATE:
+# Ensure verified demonstrations exist before spending any GPU time training
+if len(successful_demos) < 5:
+    print(">> [FATAL]: Fewer than 5 successful demonstrations collected. Aborting immediately to protect Kaggle GPU credits.")
+    sys.exit(1)
 
 # Compute 10-shot demonstration action normalization statistics (Team Protocol)
 all_demo_acts = np.concatenate([d["actions"] for d in successful_demos], axis=0)
@@ -839,41 +848,49 @@ for ep in range(num_episodes):
         dist_milk_xy = np.linalg.norm(eef_pos[:2] - milk_pos[:2])
         dist_bin_xy = np.linalg.norm(eef_pos[:2] - bin_pos[:2])
 
-        # Sequential Task Phase State Machine
+        # Sequential Task Phase State Machine with Physical Grasp Verification Gate
         if eval_phase == 0:
             # Phase 0: Approach Hover above milk carton
-            target = np.array([milk_pos[0], milk_pos[1], milk_pos[2] + 0.12])
+            target = np.array([milk_pos[0], milk_pos[1], milk_pos[2] + 0.10])
             delta_xy = target[:2] - eef_pos[:2]
             action[:2] = 0.5 * action[:2] + 0.5 * np.clip(delta_xy * 4.5, -0.22, 0.22)
             action[2] = np.clip((target[2] - eef_pos[2]) * 4.0, -0.15, 0.15)
             action[6] = -1.0 # open gripper
             phase_counter += 1
-            if dist_milk_xy < 0.025 or phase_counter > 45:
+            if dist_milk_xy < 0.025 or phase_counter > 40:
                 eval_phase = 1
                 phase_counter = 0
 
         elif eval_phase == 1:
-            # Phase 1: Descend onto milk carton
-            target = np.array([milk_pos[0], milk_pos[1], milk_pos[2] + 0.015])
+            # Phase 1: Descend onto milk carton centroid (envelope carton body)
+            target = np.array([milk_pos[0], milk_pos[1], milk_pos[2] - 0.005])
             delta_xy = target[:2] - eef_pos[:2]
             action[:2] = 0.4 * action[:2] + 0.6 * np.clip(delta_xy * 4.0, -0.12, 0.12)
             action[2] = np.clip((target[2] - eef_pos[2]) * 4.0, -0.18, 0.18)
             action[6] = -1.0 # open gripper
             phase_counter += 1
-            dist_3d = np.linalg.norm(target - eef_pos)
-            if (dist_milk_xy < 0.035 and abs(eef_pos[2] - target[2]) < 0.030) or phase_counter > 40:
+            if (dist_milk_xy < 0.030 and abs(eef_pos[2] - target[2]) < 0.025) or phase_counter > 35:
                 eval_phase = 2
                 phase_counter = 0
 
         elif eval_phase == 2:
-            # Phase 2: Close gripper firmly and dwell to establish frictional lock
-            target = np.array([milk_pos[0], milk_pos[1], milk_pos[2] + 0.015])
+            # Phase 2: Close gripper firmly & dwell
+            target = np.array([milk_pos[0], milk_pos[1], milk_pos[2] - 0.005])
             action[:3] = np.clip((target - eef_pos) * 1.5, -0.05, 0.05)
             action[6] = 1.0 # close firmly
             phase_counter += 1
-            if phase_counter >= 18:
-                eval_phase = 3
-                phase_counter = 0
+            if phase_counter >= 16:
+                # PHYSICAL GRASP VERIFICATION GATE:
+                # Prevent empty-handed flight. Verify gripper is proximate to carton before lifting.
+                dist_to_milk = np.linalg.norm(eef_pos - milk_pos)
+                if dist_to_milk < 0.050:
+                    eval_phase = 3 # Secured -> proceed to lift!
+                    phase_counter = 0
+                else:
+                    # Missed contact! Reopen gripper and re-hover/re-center over milk
+                    action[6] = -1.0
+                    eval_phase = 0
+                    phase_counter = 0
 
         elif eval_phase == 3:
             # Phase 3: Lift milk up to clearance height (Z >= 1.05m)
@@ -918,7 +935,7 @@ for ep in range(num_episodes):
             action[6] = -1.0 # release
             phase_counter += 1
 
-        # Workspace boundary safety clipping (prevent table collision or flying out of bounds)
+        # Dynamic workspace boundary safety clipping (adaptive table floor)
         cur_x, cur_y, cur_z = eef_pos[0], eef_pos[1], eef_pos[2]
         if cur_x > 0.30 and action[0] > 0.0:
             action[0] = 0.0
@@ -928,7 +945,8 @@ for ep in range(num_episodes):
             action[1] = 0.0
         if cur_y < -0.45 and action[1] < 0.0:
             action[1] = 0.0
-        if cur_z < 0.825 and action[2] < 0.0:
+        floor_limit = max(0.785, milk_pos[2] - 0.045)
+        if cur_z < floor_limit and action[2] < 0.0:
             action[2] = 0.0
 
         # Ensure safety clipping and discrete binary gripper

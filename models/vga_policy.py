@@ -157,10 +157,11 @@ class VGAPolicy(nn.Module):
         self.last_l_pool: Optional[torch.Tensor] = None
 
         self.oxe_adapter = None
+        self._oxe_bootstrapped = False
         if bootstrap_oxe and load_pretrained:
-            self._bootstrap_from_oxe(expected_context_dim=lm_dim, expected_dit_dim=dit_hidden)
+            self._bootstrap_from_oxe(expected_context_dim=lm_dim, expected_dit_dim=dit_hidden, strict=False)
 
-    def _bootstrap_from_oxe(self, expected_context_dim: int, expected_dit_dim: int):
+    def _bootstrap_from_oxe(self, expected_context_dim: int, expected_dit_dim: int, strict: bool = False):
         print(">> Attempting to bootstrap Open X-Embodiment (OXE) foundational weights...")
         try:
             repo_id = "lerobot/diffusion_policy_resnet50_pusht"
@@ -181,8 +182,13 @@ class VGAPolicy(nn.Module):
                 self.oxe_adapter = nn.Linear(expected_context_dim, oxe_dim)
 
             self.dit.load_state_dict(mapped_state, strict=False)
+            self._oxe_bootstrapped = True
+            print(">> [✓] Open X-Embodiment foundational weights successfully bootstrapped.")
         except Exception as e:
-            print(f">> Notice [OXE Bootstrap]: Failed to download or inject foundational weights. Proceeding from scratch. ({e})")
+            self._oxe_bootstrapped = False
+            if strict:
+                raise RuntimeError(f"FATAL [OXE Bootstrap]: Failed to download/inject foundational weights: {e}. Aborting to protect GPU quota.")
+            print(f">> Notice [OXE Bootstrap]: Failed to download or inject foundational weights. ({e})")
 
     def optimize_for_inference(self):
         torch.set_float32_matmul_precision("high")

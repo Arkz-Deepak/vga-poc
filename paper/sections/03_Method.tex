@@ -6,7 +6,7 @@ In this section, we present the architecture and mathematical formulation of the
 \begin{figure*}[!t]
 \centering
 \IfFileExists{figures/vga_architecture.pdf}{%
-    \includegraphics[width=0.92\textwidth]{figures/vga_architecture.pdf}%
+    \includegraphics[width=0.98\textwidth]{figures/vga_architecture.pdf}%
 }{%
     \begin{tikzpicture}[scale=0.92, every node/.style={transform shape}]
         % Input blocks
@@ -56,7 +56,7 @@ The policy predicts a continuous chunk of $H$ future end-effector actions:
 \begin{equation}
 \mathbf{A}_{k:k+H} = [\mathbf{a}_k, \mathbf{a}_{k+1}, \dots, \mathbf{a}_{k+H-1}] \in \mathbb{R}^{H \times D_a},
 \end{equation}
-where each action vector $\mathbf{a}_t = [\Delta x, \Delta y, \Delta z, \Delta \phi_x, \Delta \phi_y, \Delta \phi_z, g]^T$ comprises relative 3D Cartesian position deltas, 3D Euler orientation deltas in the robot base coordinate frame, and a binary gripper state $g \in \{0, 1\}$. In our canonical implementation, $H=16$ steps at a 20\,Hz control loop ($\Delta t = 0.05$\,s), corresponding to an 800\,ms physical predictive horizon.
+where each action vector $\mathbf{a}_t = [\Delta \mathbf{p}_t, \Delta \boldsymbol{\phi}_t, g_t]^T \in \mathbb{R}^7$ comprises 3D position deltas $\Delta \mathbf{p}_t = [\Delta x, \Delta y, \Delta z]^T$, 3D Euler orientation deltas $\Delta \boldsymbol{\phi}_t = [\Delta \phi_x, \Delta \phi_y, \Delta \phi_z]^T$ in the base coordinate frame, and a binary gripper state $g_t \in \{0, 1\}$. In our canonical implementation, $H=16$ steps at a 20\,Hz control loop ($\Delta t = 0.05$\,s), corresponding to an 800\,ms physical predictive horizon.
 
 \subsection{Continuous 3D Ray-RoPE Geometric Grounding}
 Standard transformer backbones divide an image $\mathbf{I}$ into a grid of $M = (H_v/p) \times (W_v/p)$ patches and add 2D planar positional embeddings, blinding the model to 3D camera geometry. When camera extrinsics change, identical 2D pixel coordinates correspond to entirely different 3D physical workspace positions.
@@ -92,8 +92,10 @@ The corresponding analytical target vector field is simply the constant velocity
 
 A lightweight Diffusion Transformer (DiT) network $\mathbf{v}_\theta(\mathbf{A}_\tau, \tau, \mathbf{c})$ parameterized by weights $\theta$ is trained to predict this velocity vector field conditioned on multimodal context $\mathbf{c} = \{\mathbf{E}_{\text{vis}}, \mathbf{E}_{\text{lang}}, \mathbf{a}_{\text{prev}}\}$. The conditional flow matching loss is:
 \begin{equation}
-\mathcal{L}_{\text{CFM}}(\theta) = \mathbb{E}_{\tau \sim \mathcal{U}[0, 1], \mathbf{A}_0 \sim p_0, \mathbf{A}_1 \sim p_1} \left\| \mathbf{v}_\theta(\mathbf{A}_\tau, \tau, \mathbf{c}) - (\mathbf{A}_1 - \mathbf{A}_0) \right\|_2^2.
+\label{eq:cfm_loss}
+\mathcal{L}_{\text{CFM}}(\theta) = \mathbb{E}_{\tau, \mathbf{A}_0, \mathbf{A}_1} \Bigl[ \bigl\| \mathbf{v}_\theta(\mathbf{A}_\tau, \tau, \mathbf{c}) - (\mathbf{A}_1 - \mathbf{A}_0) \bigr\|_2^2 \Bigr],
 \end{equation}
+where flow time $\tau \sim \mathcal{U}[0, 1]$, prior noise $\mathbf{A}_0 \sim p_0$, and ground-truth demonstration chunk $\mathbf{A}_1 \sim p_1$.
 
 During inference, starting from Gaussian noise $\mathbf{A}_0 \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$, the continuous action chunk $\mathbf{A}_1$ is integrated over $N_{\text{step}}$ numerical steps using an Euler or Midpoint ODE solver:
 \begin{equation}

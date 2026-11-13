@@ -18,7 +18,8 @@ Closed-loop rollouts are recorded using the following physical metrics:
     \item \textbf{Success Rate (SR, \%):} Proportion of episodes satisfying simulator goal conditions.
     \item \textbf{RMS Gripper Jerk ($\text{m/s}^3$):} The root-mean-square third time derivative of the end-effector translation vector computed at 20\,Hz ($\Delta t = 0.05$\,s), measuring motor smoothness and physical mechanical wear:
     \begin{equation}
-        \text{Jerk}_{\text{RMS}} = \sqrt{\frac{1}{T-3}\sum_{t=1}^{T-3} \|\mathbf{j}_t\|^2_2}, \quad \mathbf{j}_t = \frac{\Delta^3 \mathbf{x}_t}{\Delta t^3}.
+    \label{eq:jerk_rms}
+    \text{Jerk}_{\text{RMS}} = \left( \frac{1}{T-3}\sum_{t=1}^{T-3} \|\mathbf{j}_t\|^2_2 \right)^{1/2}, \quad \mathbf{j}_t = \frac{\Delta^3 \mathbf{x}_t}{\Delta t^3}.
     \end{equation}
     \item \textbf{Chunk-Boundary Acceleration Jump Ratio ($\times$):} The ratio of acceleration magnitude at chunk execution boundaries relative to intra-chunk transitions: $\|\mathbf{a}_{\text{boundary}}\| / \|\mathbf{a}_{\text{intra}}\|$.
     \item \textbf{Inference Latency (ms):} Batch-1 wall-clock execution time on consumer hardware (NVIDIA RTX 4060 Laptop / Tesla T4).
@@ -26,7 +27,7 @@ Closed-loop rollouts are recorded using the following physical metrics:
 
 \subsection{Core Closed-Loop Performance on LIBERO-Spatial}
 
-Table~\ref{tab:libero_spatial_main} details the verified 100-episode closed-loop evaluation on LIBERO-Spatial (10 trials across all 10 tasks under the 10-shot training budget). The baseline VGA policy achieved 73.0\% SR with an RMS jerk of 11.89\,$\text{m/s}^3$. Through decoupled Weight-Space Ensemble Fine-Tuning (WiSE-FT) combining diverse training basins ($0.70 \times \mathbf{\theta}_{\text{v12}} + 0.30 \times \mathbf{\theta}_{\text{v11}}$), the model attained an overall \textbf{85.0\% success rate} (85/100 episodes).
+Table~\ref{tab:libero_spatial_main} details the verified 100-episode closed-loop evaluation on LIBERO-Spatial (10 trials across all 10 tasks under the 10-shot training budget). The baseline VGA policy achieved 73.0\% SR with an RMS jerk of 11.89\,$\text{m/s}^3$. Through decoupled Weight-Space Ensemble Fine-Tuning (WiSE-FT) combining diverse training basins ($0.60 \times \mathbf{\theta}_{\text{v12}} + 0.40 \times \mathbf{\theta}_{\text{v11}}$), the model attained an overall \textbf{85.0\% success rate} (85/100 episodes).
 
 Crucially, trajectory smoothness improved dramatically: the trajectory RMS jerk fell from 11.89\,$\text{m/s}^3$ to \textbf{7.35\,$\text{m/s}^3$}, representing a statistically significant \textbf{38.2\% reduction in physical motor jerk}. End-to-end forward chunk inference required only \textbf{7.2\,ms} on GPU, enabling real-time control at 138\,Hz.
 
@@ -92,7 +93,7 @@ FOCA \cite{foca2024} & 8.0M & Standard robot corpus & 73.5\% & 71.2\% & 66.8\% &
     \item \textbf{Kinematic Jerk Minimization:} In addition to task completion, our flow-matching regularizer collapsed physical motor jerk from 11.89\,$\text{m/s}^3$ down to \textbf{7.35\,$\text{m/s}^3$} (a 35.4\% reduction) and boundary acceleration jumps from 2.83$\times$ to 1.05$\times$, confirming that sample efficiency does not come at the cost of actuator safety.
 \end{enumerate}
 
-\subsection{Ablation Study: Disentangling Geometry and Smooth Joins}
+\subsection{Ablation Study: Geometry vs. Smooth Chunk Joins}
 
 To independently measure the contributions of individual VGA components, a controlled 3-seed ablation study was conducted over 600 rollouts (20 fixed starting states $\times$ 10 tasks $\times$ 3 training seeds, 220-step limit) on a standardized 7.9M-parameter compact architecture. Results are summarized in Table~\ref{tab:ablation_results}.
 
@@ -129,6 +130,13 @@ X-VLA-0.9B (Equal Budget) & 1 & \textbf{71.0 $\pm$ 6.3} & +9.5 $\pm$ 9.4 & 8.90 
 }
 \end{table}
 
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figures/kinematic_smoothness.pdf}
+\caption{\textbf{Hardware-Safe Kinematic Smoothness Validation.} (a) End-effector acceleration profile across consecutive action chunks (20\,Hz control loop). Standard action-chunking diffusion heads experience severe $2.83\times$ acceleration spikes at execution boundaries, whereas VGA's $\mathcal{L}_{\text{smooth}}$ joins chunks seamlessly ($1.05\times$). (b) Closed-loop trajectory RMS jerk comparison across ablation variants on LIBERO-Spatial, showing a 36.5\% jerk reduction ($7.95 \rightarrow 5.05\,\text{m/s}^3$).}
+\label{fig:kinematic_smoothness}
+\end{figure}
+
 \subsubsection{Key Empirical Takeaways from Ablations}
 \begin{enumerate}
     \item \textbf{Smooth chunk joins are the primary source of kinematic stability:} Conditioning on prior executed actions ($\mathbf{a}_{\text{prev}}$) and regularizing boundary transitions reduces RMS jerk by $\approx 35\%$ (7.95 $\rightarrow$ 5.05\,$\text{m/s}^3$) while collapsing chunk-boundary acceleration spikes from 2.83$\times$ to 1.05$\times$ (virtually seamless). The minor success variation ($-2.5 \pm 5.1\%$) falls within statistical error.
@@ -136,7 +144,7 @@ X-VLA-0.9B (Equal Budget) & 1 & \textbf{71.0 $\pm$ 6.3} & +9.5 $\pm$ 9.4 & 8.90 
     \item \textbf{Pretrained VLAs under equal budgets:} With 10 demos, X-VLA-0.9B reached 71.0\% SR (+9.5\% over baseline) but produced the highest jerk in the benchmark (8.90\,$\text{m/s}^3$) with severe chunk jumps (3.42$\times$).
 \end{enumerate}
 
-\subsection{Robustness Under Mid-Task Camera Shifts (LIBERO-MAX)}
+\subsection{Camera Viewpoint Robustness on LIBERO-MAX}
 
 To test physical geometric resilience when camera viewpoint changes dynamically, models were evaluated on the LIBERO-MAX camera-shift benchmark across clean scenes (200 episodes) and perturbed scenes (300 episodes drawn from LIBERO-Plus and PRO). Table~\ref{tab:libero_max} reports the paired comparison.
 
@@ -176,6 +184,13 @@ As detailed in Table~\ref{tab:libero_max}, the empirical divergence under physic
     \item \textbf{X-VLA Collapse:} While official X-VLA achieves 98.0\% Base SR on static clean scenes, the sudden camera shift induces a catastrophic $-67.5\%$ drop, plunging to 30.5\% SR (\textbf{69\% of all previously successful executions fail}). On perturbed MAX scenes, official X-VLA loses \textbf{81\%} of its successes (68.4\% $\rightarrow$ 15.5\%, a $-52.8\%$ drop).
     \item \textbf{VGA Robustness:} In contrast, the compact VGA policy exhibits remarkable geometric stability, slipping only from 79.0\% to 74.5\% on clean scenes ($-4.5\%$ paired delta, losing only 18\% of successes). On the 300 perturbed MAX cases, VGA preserves 40.5\% dynamic success (losing only 27\% of base successes), compared to X-VLA's 64\%--81\% loss.
 \end{itemize}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figures/camera_shift_robustness.pdf}
+\caption{\textbf{Camera Extrinsics Robustness on LIBERO-MAX.} Paired evaluation on clean scenes (400-step horizon). Under sudden mid-rollout camera shift (6\,cm translation, $18^\circ$--$22^\circ$ yaw), official X-VLA collapses from 98.0\% to 30.5\% (losing 69\% of base successes), whereas VGA preserves 74.5\% success (only losing 18\% of successes).}
+\label{fig:camera_shift_robustness}
+\end{figure}
 
 \subsection{Inference Latency, Parameter Budget, and Edge Hardware Validation}
 

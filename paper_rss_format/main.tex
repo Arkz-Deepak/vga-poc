@@ -1,0 +1,52 @@
+\documentclass[conference]{IEEEtran}
+\usepackage{times}
+\usepackage{multicol}
+\usepackage[bookmarks=true]{hyperref}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usepackage{etoolbox}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{microtype}
+\usepackage{colortbl}
+\usepackage{balance}
+\usepackage{url}
+\usepackage{placeins}
+
+\title{VGA: Vision-Geometry-Action Policy with Continuous 3D Ray-RoPE \\ for Smooth and Camera-Invariant Robot Manipulation}
+
+\author{
+    \IEEEauthorblockN{Shafeeq Sadiq\IEEEauthorrefmark{1}, Trishanth Mellimi\IEEEauthorrefmark{1}, Deepak R\IEEEauthorrefmark{2}, and Tran Nguyen Le\IEEEauthorrefmark{3}}
+    \IEEEauthorblockA{\IEEEauthorrefmark{1}Independent Robotics Researchers}
+    \IEEEauthorblockA{\IEEEauthorrefmark{2}Dept. of Robotics and Automation Engineering, Dhaanish Ahmed College of Engg., Anna Univ., Chennai, India\\
+    Email: 24deepakrobo099@dhaanishcollege.in}
+    \IEEEauthorblockA{\IEEEauthorrefmark{3}Dept. of Engineering Technology and Didactics, Technical University of Denmark (DTU), Ballerup, Denmark\\
+    Email: tngle@dtu.dk}
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Vision-Language-Action (VLA) models show substantial promise for generalist robotic manipulation, yet standard monolithic architectures face three critical bottlenecks: high computational footprint ($>$7B parameters), acute vulnerability to camera viewpoint and extrinsics shifts, and mechanical joint jerkiness caused by discontinuous action-chunk boundaries. In this work, we propose \textbf{Vision-Geometry-Action (VGA)}, a lightweight (375M parameter) manipulation policy that directly couples visual semantics with metric 3D scene geometry and kinematically smooth trajectory generation. VGA integrates continuous \textbf{3D Ray-RoPE} (Ray-based Rotary Position Embeddings) into transformer attention layers, projecting physical camera ray geometry directly into latent spatial representations without requiring explicit depth sensors or 3D point cloud reconstructions. To eliminate inter-chunk trajectory discontinuities common in receding-horizon diffusion models, VGA employs prior-action conditioning with a boundary velocity-matching loss ($\mathcal{L}_{\text{smooth}}$). 
+
+Evaluated across rigorous closed-loop robotic manipulation benchmarks, VGA achieves an \textbf{85.0\%} verified success rate under 10-shot fine-tuning on LIBERO-Spatial. In controlled multi-seed kinematic ablations, our smooth chunk join formulation reduces trajectory RMS jerk by \textbf{35.4\%} (from 11.38 to 7.35\,$\text{m/s}^3$) and suppresses chunk-boundary acceleration jumps from $2.83\times$ down to $1.05\times$. Furthermore, under severe out-of-distribution camera extrinsics perturbations in LIBERO-MAX, while monolithic models collapse from 98.0\% to 30.5\% ($-67.5\%$), VGA retains 74.5\% success ($-4.5\%$), proving geometric invariance. Operating under a sub-3.0\,GB VRAM footprint with 152\,ms chunk latency on an edge NVIDIA T4 GPU, VGA demonstrates that lightweight, geometry-grounded policies can achieve state-of-the-art robustness, efficiency, and hardware-safe smoothness.
+\end{abstract}
+
+\IEEEpeerreviewmaketitle
+
+\input{sections/01_Introduction}
+\input{sections/02_RelatedWork}
+\input{sections/03_Method}
+\input{sections/04_Experiments}
+\input{sections/05_Conclusion}
+
+\balance
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

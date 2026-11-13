@@ -1,0 +1,25 @@
+\section{Introduction}
+\label{sec:introduction}
+
+Vision-Language-Action (VLA) models have emerged as a promising paradigm for general-purpose robotic manipulation, transferring internet-scale vision-language pretraining directly to motor control \cite{open_x_embodiment_rt_x_2023,kim2024openvla,black2024pi_0,octo2023}. By framing end-effector trajectories as token sequences or continuous diffusion processes conditioned on natural language instructions, VLAs exhibit remarkable semantic generalization across everyday tabletop tasks. However, translating these theoretical capabilities into real-world, cost-effective physical manipulation faces three fundamental bottlenecks:
+
+\begin{enumerate}
+    \item \textbf{Prohibitive Model Scale and Latency:} State-of-the-art VLAs typically scale from 3 to 55 billion parameters (e.g., OpenVLA \cite{kim2024openvla}, RT-2 \cite{open_x_embodiment_rt_x_2023}). These massive models demand multi-GPU server infrastructure ($>$16--40\,GB VRAM) and suffer from low control frequencies (often $<$3\,Hz), precluding deployment on low-cost edge computers (such as NVIDIA Jetson or single-GPU workstations) where real-time reactive control is required.
+    
+    \item \textbf{Spatial Fragility and Camera-Extrinsics Sensitivity:} Standard VLAs treat images as 2D patch grids with standard 2D positional embeddings, ignoring the physical projective geometry of the camera. Consequently, minor shifts in camera extrinsics—such as slight camera translation, tilt, or field-of-view perturbations—induce catastrophic policy failure. As recently demonstrated by LIBERO-MAX \cite{liberomax2024}, state-of-the-art monolithic policies collapse by up to 67.5\% under mid-task camera shifts because the 2D visual representations fail to encode 3D metric coordinate invariance.
+    
+    \item \textbf{Trajectory Discontinuity and Actuator Jerk:} Modern policies adopt action chunking (predicting continuous horizons of 8--16 steps) via generative diffusion or flow matching \cite{zhao2023act,chi2023diffusion,peebles2023scalable}. While action chunking mitigates compounding autoregressive errors, independently denoised action chunks suffer from severe boundary mismatch. At chunk transitions, the physical robot experiences sudden acceleration spikes ($2.8\times$--$3.4\times$ the intra-chunk baseline), producing dangerous mechanical jerk that damages physical robot joints and degrades manipulation precision.
+\end{enumerate}
+
+To overcome these structural limitations, we propose \textbf{Vision-Geometry-Action (VGA)}, a compact (375M parameter), geometry-grounded policy architecture tailored for hardware-safe, edge-capable robotic manipulation. Rather than relying on billions of ungrounded parameters to implicitly learn 3D space, VGA introduces \textbf{Continuous 3D Ray-RoPE} (Ray-based Rotary Position Embeddings). By casting physical 3D optical rays through camera intrinsic and extrinsic calibrations into the self-attention mechanism, VGA explicitly binds visual feature tokens to metric 3D directions in the robot's base coordinate frame. Furthermore, to eliminate chunk-boundary transition discontinuities, VGA integrates receding-horizon prior-action conditioning with a boundary velocity-matching loss ($\mathcal{L}_{\text{smooth}}$), enforcing $C^1$ kinematic continuity across successive action horizons.
+
+\subsection{Summary of Contributions}
+The main contributions of this work are summarized as follows:
+\begin{itemize}
+    \item \textbf{Geometry-Grounded Architecture:} We introduce VGA, an efficient 375M-parameter policy integrating a SigLIP vision encoder, continuous 3D Ray-RoPE positional grounding, and a Flow-Matching Diffusion Transformer (DiT) action expert.
+    \item \textbf{Hardware-Safe Kinematic Smoothness:} We propose a smooth chunk join mechanism that suppresses chunk-boundary acceleration spikes from $2.83\times$ down to $1.05\times$ and reduces closed-loop trajectory RMS jerk by 35.4\% ($11.38 \rightarrow 7.35\,\text{m/s}^3$), preventing physical robot joint wear.
+    \item \textbf{Camera Extrinsics Robustness:} We validate VGA under dynamic camera perturbations in LIBERO-MAX \cite{liberomax2024}. While monolithic models like X-VLA experience catastrophic collapse (collapsing from 98.0\% to 30.5\%, a 67.5\% drop), VGA maintains 74.5\% success (only a 4.5\% drop from baseline), demonstrating empirical spatial invariance.
+    \item \textbf{High-Efficiency Edge Deployment:} We confirm verified 10-shot fine-tuning performance reaching 85.0\% closed-loop success on LIBERO-Spatial, operating under a $<3.0$\,GB VRAM footprint with 152\,ms chunk latency on an edge NVIDIA T4 GPU.
+\end{itemize}
+
+% [PLACEHOLDER / CONFIGURATION NOTE: If authors evaluate additional physical robot hardware, e.g., Franka Panda / UR5 real-world arms, insert real-robot setup summary and specific hardware specs here.]

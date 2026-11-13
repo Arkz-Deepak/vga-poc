@@ -38,9 +38,9 @@ Crucially, trajectory smoothness improved dramatically: the trajectory RMS jerk 
 \resizebox{\columnwidth}{!}{%
 \begin{tabular}{lcccc}
 \toprule
-\textbf{Task ID \& Description} & \textbf{v11 Baseline} & \textbf{VGA (v12 Ours)} & \textbf{Steps (Avg)} & \textbf{Jerk ($\text{m/s}^3$)} \\
+\textbf{Task (LIBERO-Spatial)} & \textbf{v11 Base} & \textbf{VGA (Ours)} & \textbf{Steps} & \textbf{Jerk ($\text{m/s}^3$)} \\
 \midrule
-00: Bowl between plate and ramekin $\rightarrow$ plate & 8/10 (80\%) & \textbf{10/10 (100\%)} & 82.4 & 6.28 \\
+00: Bowl betw. plate/ramekin $\rightarrow$ plate & 8/10 (80\%) & \textbf{10/10 (100\%)} & 82.4 & 6.28 \\
 01: Bowl next to ramekin $\rightarrow$ plate & 4/10 (40\%) & \textbf{6/10 (60\%)} & 274.5 & 8.40 \\
 02: Bowl from table center $\rightarrow$ plate & 9/10 (90\%) & \textbf{9/10 (90\%)} & 125.4 & 4.62 \\
 03: Bowl on cookie box $\rightarrow$ plate & 9/10 (90\%) & \textbf{10/10 (100\%)} & 127.8 & 7.14 \\
@@ -51,7 +51,7 @@ Crucially, trajectory smoothness improved dramatically: the trajectory RMS jerk 
 08: Bowl next to plate $\rightarrow$ plate & 9/10 (90\%) & \textbf{10/10 (100\%)} & 125.5 & 7.09 \\
 09: Bowl on wooden cabinet $\rightarrow$ plate & 8/10 (80\%) & \textbf{8/10 (80\%)} & 194.2 & 7.61 \\
 \midrule
-\textbf{Overall / Mean} & 73/100 (73.0\%) & \textbf{85/100 (85.0\%)} & \textbf{170.1} & \textbf{7.35} \\
+\textbf{Overall / Mean} & 73/100 (73\%) & \textbf{85/100 (85\%)} & \textbf{170.1} & \textbf{7.35} \\
 \bottomrule
 \end{tabular}%
 }
@@ -78,8 +78,8 @@ SmolVLA \cite{lerobot2024} & 450M & DROID + Open X & 54.5\% & 52.0\% & 48.7\% & 
 X-VLA \cite{xvla2024} & 900M & Multi-robot embodiments & 71.0\% & 69.4\% & 64.2\% & 56.8\% & 68.2\% & 65.4\% \\
 FOCA \cite{foca2024} & 8.0M & Standard robot corpus & 73.5\% & 71.2\% & 66.8\% & 64.0\% & 70.5\% & 68.9\% \\
 \midrule
-\rowcolor{blue!5} \textbf{VGA (Ours, WiSE-FT 10-Shot Spatial)} & \textbf{375M} & \textbf{None (0 Pretrain Trajectories)} & \textbf{85.0\%} & -- & -- & -- & -- & -- \\
-\rowcolor{green!8} \textbf{VGA (Ours, Unified Multi-Suite - 24k)} & \textbf{8.07M} & \textbf{None (0 Pretrain Trajectories)} & 72.5\% & \textbf{83.0\%} & \textbf{75.0\%} & \textbf{60.0\%} & \textbf{76.8\%} & \textbf{72.6\%} \\
+\rowcolor{blue!5} \textbf{VGA (Ours, WiSE-FT 10-Shot)} & \textbf{375M} & \textbf{None (0 Pretrain Trajectories)} & \textbf{85.0\%} & -- & -- & -- & -- & -- \\
+\rowcolor{green!8} \textbf{VGA (Ours, Unified Multi-Suite)} & \textbf{8.07M} & \textbf{None (0 Pretrain Trajectories)} & 72.5\% & \textbf{83.0\%} & \textbf{75.0\%} & \textbf{60.0\%} & \textbf{76.8\%} & \textbf{72.6\%} \\
 \bottomrule
 \end{tabular}%
 }
@@ -99,12 +99,12 @@ To independently measure the contributions of individual VGA components, a contr
 
 \begin{table}[t]
 \centering
-\caption{Controlled 3-seed ablation study on LIBERO-Spatial (200 rollouts per seed, 600 total per 3-seed row; 95\% confidence intervals reported; jerk measured at 20\,Hz).}
+\caption{Controlled 3-seed ablation study on LIBERO-Spatial (200 rollouts per seed, 600 total per 3-seed row; 95\% confidence intervals; jerk in $\text{m/s}^3$).}
 \label{tab:ablation_results}
 \resizebox{\columnwidth}{!}{%
 \begin{tabular}{lccccc}
 \toprule
-\textbf{Variant} & \textbf{Seeds} & \textbf{Success (\%)} & \textbf{$\Delta$ vs. Base} & \textbf{Jerk ($\text{m/s}^3$)} & \textbf{Chunk Jump} \\
+\textbf{Variant} & \textbf{Seeds} & \textbf{SR (\%)} & \textbf{$\Delta_{\text{Base}}$} & \textbf{Jerk} & \textbf{Jump} \\
 \midrule
 \multicolumn{6}{l}{\textit{5 Demonstrations per Task Budget}} \\
 Compact Baseline & 3 & 55.2 $\pm$ 4.0 & --- & 7.64 & 2.88$\times$ \\
@@ -113,8 +113,8 @@ Compact Baseline & 3 & 55.2 $\pm$ 4.0 & --- & 7.64 & 2.88$\times$ \\
 + Smooth Chunk Joins & 3 & 51.0 $\pm$ 4.0 & $-4.2 \pm 5.1$ & \textbf{4.82} & \textbf{1.06$\times$} \\
 All Three Add-ons & 3 & 54.3 $\pm$ 4.0 & $-0.8 \pm 5.2$ & 5.04 & 1.05$\times$ \\
 Baseline + Heuristic MA & 1 & 50.5 $\pm$ 6.9 & $-9.5 \pm 7.7$ & 5.22 & 1.54$\times$ \\
-SmolVLA-450M (Equal Budget) & 1 & 54.5 $\pm$ 6.9 & $-5.5 \pm 8.7$ & 7.32 & 2.20$\times$ \\
-X-VLA-0.9B (Equal Budget) & 1 & 54.0 $\pm$ 6.9 & $-6.0 \pm 9.2$ & 7.83 & 2.86$\times$ \\
+SmolVLA-450M & 1 & 54.5 $\pm$ 6.9 & $-5.5 \pm 8.7$ & 7.32 & 2.20$\times$ \\
+X-VLA-0.9B & 1 & 54.0 $\pm$ 6.9 & $-6.0 \pm 9.2$ & 7.83 & 2.86$\times$ \\
 \midrule
 \multicolumn{6}{l}{\textit{10 Demonstrations per Task Budget}} \\
 Compact Baseline & 3 & 65.0 $\pm$ 3.8 & --- & 7.95 & 2.83$\times$ \\
@@ -123,8 +123,8 @@ Compact Baseline & 3 & 65.0 $\pm$ 3.8 & --- & 7.95 & 2.83$\times$ \\
 + Smooth Chunk Joins & 3 & 62.5 $\pm$ 3.9 & $-2.5 \pm 5.1$ & \textbf{5.05} & \textbf{1.05$\times$} \\
 All Three Add-ons & 3 & 63.0 $\pm$ 3.9 & $-2.0 \pm 4.8$ & 5.25 & 1.04$\times$ \\
 Baseline + Heuristic MA & 1 & 50.5 $\pm$ 6.9 & $-11.0 \pm 8.3$ & 6.43 & 1.69$\times$ \\
-SmolVLA-450M (Equal Budget) & 1 & 63.0 $\pm$ 6.7 & +1.5 $\pm$ 9.2 & 7.60 & 2.15$\times$ \\
-X-VLA-0.9B (Equal Budget) & 1 & \textbf{71.0 $\pm$ 6.3} & +9.5 $\pm$ 9.4 & 8.90 & 3.42$\times$ \\
+SmolVLA-450M & 1 & 63.0 $\pm$ 6.7 & +1.5 $\pm$ 9.2 & 7.60 & 2.15$\times$ \\
+X-VLA-0.9B & 1 & \textbf{71.0 $\pm$ 6.3} & +9.5 $\pm$ 9.4 & 8.90 & 3.42$\times$ \\
 \bottomrule
 \end{tabular}%
 }
@@ -155,24 +155,24 @@ To test physical geometric resilience when camera viewpoint changes dynamically,
 \resizebox{\columnwidth}{!}{%
 \begin{tabular}{lccccc}
 \toprule
-\textbf{Model} & \textbf{Split} & \textbf{Base SR (\%)} & \textbf{Dynamic SR (\%)} & \textbf{Dynamic $-$ Base} & \textbf{Success Lost} \\
+\textbf{Model} & \textbf{Split} & \textbf{Base SR} & \textbf{Dyn. SR} & \textbf{Dyn.$-$Base} & \textbf{Lost} \\
 \midrule
 \multicolumn{6}{l}{\textit{Few-Shot Regime (10 Demonstrations per Task)}} \\
 \textbf{VGA (All Add-ons)} & Clean & 79.0\% & 74.5\% & \textbf{$-4.5 \pm 6.7$} & \textbf{18\%} \\
-X-VLA-0.9B (Equal) & Clean & 78.5\% & 34.5\% & \textbf{$-44.0 \pm 7.9$} & \textbf{61\%} \\
+X-VLA-0.9B & Clean & 78.5\% & 34.5\% & \textbf{$-44.0 \pm 7.9$} & \textbf{61\%} \\
 \midrule
-\textbf{VGA (All Add-ons)} & MAX (300) & 43.2\% & 40.5\% & \textbf{$-2.7 \pm 5.2$} & \textbf{27\%} \\
-X-VLA-0.9B (Equal) & MAX (300) & 32.0\% & 19.3\% & \textbf{$-12.7 \pm 6.3$} & \textbf{64\%} \\
+\textbf{VGA (All Add-ons)} & MAX & 43.2\% & 40.5\% & \textbf{$-2.7 \pm 5.2$} & \textbf{27\%} \\
+X-VLA-0.9B & MAX & 32.0\% & 19.3\% & \textbf{$-12.7 \pm 6.3$} & \textbf{64\%} \\
 \midrule
 \multicolumn{6}{l}{\textit{Full-Data Reference Models}} \\
-Official X-VLA Checkpoint & Clean & 98.0\% & 30.5\% & \textbf{$-67.5 \pm 6.5$} & \textbf{69\%} \\
-Official X-VLA Checkpoint & MAX (300) & 68.4\% & 15.5\% & \textbf{$-52.8 \pm 7.8$} & \textbf{81\%} \\
+Official X-VLA & Clean & 98.0\% & 30.5\% & \textbf{$-67.5 \pm 6.5$} & \textbf{69\%} \\
+Official X-VLA & MAX & 68.4\% & 15.5\% & \textbf{$-52.8 \pm 7.8$} & \textbf{81\%} \\
 TaskFocus $\pi_{0.5}$ (8 Demos) & Clean & 98.5\% & 92.5\% & $-6.0 \pm 3.8$ & 7\% \\
-TaskFocus $\pi_{0.5}$ (8 Demos) & MAX (300) & 86.5\% & 78.8\% & $-7.6 \pm 4.5$ & 14\% \\
+TaskFocus $\pi_{0.5}$ (8 Demos) & MAX & 86.5\% & 78.8\% & $-7.6 \pm 4.5$ & 14\% \\
 $\pi_{0.5}$ Full Checkpoint & Clean & 100.0\% & 98.5\% & $-1.5 \pm 1.7$ & 2\% \\
-$\pi_{0.5}$ Full Checkpoint & MAX (300) & 86.2\% & 84.8\% & $-1.4 \pm 3.5$ & 6\% \\
+$\pi_{0.5}$ Full Checkpoint & MAX & 86.2\% & 84.8\% & $-1.4 \pm 3.5$ & 6\% \\
 MambaAct L12 Reference & Clean & 100.0\% & 97.0\% & $-3.0 \pm 2.4$ & 3\% \\
-MambaAct L12 Reference & MAX (300) & 88.3\% & 78.0\% & $-10.3 \pm 4.6$ & 15\% \\
+MambaAct L12 Reference & MAX & 88.3\% & 78.0\% & $-10.3 \pm 4.6$ & 15\% \\
 \bottomrule
 \end{tabular}%
 }
@@ -203,7 +203,7 @@ Deploying embodied manipulation policies directly on physical robot controllers 
 \resizebox{\columnwidth}{!}{%
 \begin{tabular}{lcccc}
 \toprule
-\textbf{Model Architecture} & \textbf{Parameters} & \textbf{GPU VRAM} & \textbf{Chunk Latency} & \textbf{Control Frequency} \\
+\textbf{Model Architecture} & \textbf{Params} & \textbf{VRAM} & \textbf{Latency} & \textbf{Frequency} \\
 \midrule
 OpenVLA \cite{kim2024openvla} & 7.0B & 15.2\,GB & 280.0\,ms & 3.5\,Hz \\
 $\pi_0$ \cite{black2024pi_0} & 3.0B & 8.4\,GB & 110.0\,ms & 9.0\,Hz \\
@@ -211,7 +211,7 @@ X-VLA \cite{xvla2024} & 900M & 5.2\,GB & 182.0\,ms & 5.5\,Hz \\
 SmolVLA \cite{lerobot2024} & 450M & 3.8\,GB & 539.0\,ms & 1.8\,Hz \\
 \midrule
 \rowcolor{blue!5} \textbf{VGA (Ours, Compact DiT)} & \textbf{8.07M} & \textbf{$<$1.5\,GB} & \textbf{7.2\,ms} & \textbf{138.8\,Hz} \\
-\rowcolor{green!8} \textbf{VGA (Ours, Full Architecture)} & \textbf{375M} & \textbf{$<$3.0\,GB} & \textbf{152.0\,ms} & \textbf{6.6\,Hz (Receding Chunk)} \\
+\rowcolor{green!8} \textbf{VGA (Ours, Full Architecture)} & \textbf{375M} & \textbf{$<$3.0\,GB} & \textbf{152.0\,ms} & \textbf{6.6\,Hz} \\
 \bottomrule
 \end{tabular}%
 }

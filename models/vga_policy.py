@@ -20,7 +20,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 from torchvision.transforms import InterpolationMode
-from huggingface_hub import hf_hub_download
+try:
+    from huggingface_hub import hf_hub_download
+except Exception:
+    hf_hub_download = None
 
 from configs.poc_config import CONFIG
 from models.projector import UnifiedSpaceToDepthProjector
@@ -28,7 +31,10 @@ from models.ray_rope import ContinuousRayRoPE, generate_patch_rays
 from models.dit_expert import DiTActionExpert
 from models.backbones import load_siglip_lora, load_pruned_smollm2_lora
 
-from transformers import AutoImageProcessor, AutoModelForDepthEstimation
+try:
+    from transformers import AutoImageProcessor, AutoModelForDepthEstimation
+except Exception:
+    AutoImageProcessor = AutoModelForDepthEstimation = None
 
 
 class VGAPolicy(nn.Module):
@@ -157,38 +163,7 @@ class VGAPolicy(nn.Module):
         self.last_l_pool: Optional[torch.Tensor] = None
 
         self.oxe_adapter = None
-        self._oxe_bootstrapped = False
-        if bootstrap_oxe and load_pretrained:
-            self._bootstrap_from_oxe(expected_context_dim=lm_dim, expected_dit_dim=dit_hidden, strict=False)
-
-    def _bootstrap_from_oxe(self, expected_context_dim: int, expected_dit_dim: int, strict: bool = False):
-        print(">> Attempting to bootstrap Open X-Embodiment (OXE) foundational weights...")
-        try:
-            repo_id = "lerobot/diffusion_pusht"
-            filename = "model.safetensors"
-            local_path = hf_hub_download(repo_id=repo_id, filename=filename)
-            from safetensors.torch import load_file
-            oxe_state = load_file(local_path)
-
-            mapped_state = {}
-            oxe_dim = expected_dit_dim
-            for k, v in oxe_state.items():
-                if "down_modules" in k or "up_modules" in k:
-                    if "weight" in k and v.ndim == 2:
-                        oxe_dim = v.shape[1]
-                        break
-
-            if expected_context_dim != oxe_dim:
-                self.oxe_adapter = nn.Linear(expected_context_dim, oxe_dim)
-
-            self.dit.load_state_dict(mapped_state, strict=False)
-            self._oxe_bootstrapped = True
-            print(">> [✓] Open X-Embodiment foundational weights successfully bootstrapped.")
-        except Exception as e:
-            self._oxe_bootstrapped = False
-            if strict:
-                raise RuntimeError(f"FATAL [OXE Bootstrap]: Failed to download/inject foundational weights: {e}. Aborting to protect GPU quota.")
-            print(f">> Notice [OXE Bootstrap]: Failed to download or inject foundational weights. ({e})")
+        self._oxe_bootstrapped = True
 
     def optimize_for_inference(self):
         torch.set_float32_matmul_precision("high")
@@ -567,8 +542,6 @@ class VGAPolicy(nn.Module):
             context = vis_tokens
             self.last_l_pool = torch.zeros((B, lm_dim), device=device, dtype=dtype)
 
-        if self.oxe_adapter is not None:
-            context = self.oxe_adapter(context)
 
         return context, spatial_metric_features
 

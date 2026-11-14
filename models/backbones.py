@@ -19,8 +19,12 @@ try:
 except Exception:
     pass
 
-from transformers import AutoTokenizer, AutoConfig, SiglipVisionModel, AutoModel
-from peft import LoraConfig, get_peft_model
+try:
+    from transformers import AutoTokenizer, AutoConfig, SiglipVisionModel, AutoModel
+    from peft import LoraConfig, get_peft_model
+except Exception:
+    AutoTokenizer = AutoConfig = SiglipVisionModel = AutoModel = None
+    LoraConfig = get_peft_model = None
 from configs.poc_config import CONFIG
 
 
